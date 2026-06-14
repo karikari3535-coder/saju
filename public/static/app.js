@@ -28,8 +28,12 @@ const state = {
   // 채널 스캔
   channel: { scanning: false, videos: [], stats: null, channelTitle: null, error: '', open: false },
   pickedAuthor: '',
-  // 일괄 생성
+  // 일괄 생성 (단일 영상)
   batch: { running: false, results: [], stats: null, error: '' },
+  // 채널 전체 일괄 생성 — 영상별 결과 묶음
+  //   running: 전체 실행 중 여부, total/done: 진행률, current: 현재 처리 영상 제목
+  //   videos: [{ video_id, title, published_at, video_birth_year, status, unanswered, results, stats, error, open }]
+  channelBatch: { running: false, total: 0, done: 0, current: '', videos: [] },
 };
 
 function el(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
@@ -191,7 +195,9 @@ async function scanChannel(link) {
   state.channel.scanning = true; state.channel.open = true; state.channel.error = '';
   state.channel.videos = []; state.channel.stats = null; state.error = '';
   // 영상 목록/일괄결과는 초기화 (다른 모드로 들어왔으므로)
-  state.youtube.list = []; state.batch.results = []; render();
+  state.youtube.list = []; state.batch.results = [];
+  state.channelBatch = { running: false, total: 0, done: 0, current: '', videos: [] };
+  render();
   try {
     const { data } = await axios.get('/api/youtube/channel', {
       params: { link, maxVideos: state.maxVideos },
@@ -308,6 +314,165 @@ function copyOneBatch(idx) {
   navigator.clipboard.writeText(r.draft).then(() => {
     const btn = document.getElementById('batch-copy-' + idx);
     if (btn) { btn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => render(), 1200); }
+  });
+}
+
+// ============================================================
+// 채널 전체 일괄 생성 (영상별로 미답변 댓글 → 답글 초안 한꺼번에)
+// ============================================================
+
+// 채널 목록의 한 영상에 대해: 미답변 댓글 수집 → 일괄 초안 생성
+// channelBatch.videos[i] 항목을 진행상황에 맞게 갱신하며 render() 한다.
+async function processOneVideo(entry) {
+  entry.status = 'loading'; entry.error = ''; render();
+  try {
+    // 1) 미답변 사주 댓글 수집
+    const { data: cd } = await axios.get('/api/youtube/comments', {
+      params: { videoId: entry.video_id, maxPages: 3, onlySaju: true, onlyUnanswered: true },
+    });
+    if (!cd.ok) { entry.status = 'error'; entry.error = cd.error || '댓글 수집 실패'; render(); return; }
+    const list = cd.comments || [];
+    const birthYear = (cd.video_birth_year ?? entry.video_birth_year) ?? null;
+    if (cd.video_title) entry.title = cd.video_title;
+    entry.unanswered = list.length;
+    if (!list.length) { entry.status = 'empty'; entry.results = []; entry.stats = { generated: 0, skipped: 0, failed: 0 }; render(); return; }
+
+    // 2) 일괄 초안 생성
+    entry.status = 'generating'; render();
+    const items = list.map(c => ({
+      comment_id: c.comment_id, author: c.author, text: c.text, published_at: c.published_at,
+    }));
+    const { data: bd } = await axios.post('/api/batch', { items, videoBirthYear: birthYear });
+    if (!bd.ok) { entry.status = 'error'; entry.error = bd.error || '일괄 생성 실패'; render(); return; }
+    entry.results = bd.results || [];
+    entry.stats = bd.stats || null;
+    entry.truncated = bd.truncated || 0;
+    entry.status = 'done';
+  } catch (e) {
+    entry.status = 'error';
+    entry.error = e?.response?.data?.error || e.message;
+  } finally {
+    render();
+  }
+}
+
+// 채널 목록의 특정 영상 1개만 "바로 생성" (개별 버튼)
+async function generateForVideo(videoId) {
+  const v = (state.channel.videos || []).find(x => x.video_id === videoId);
+  if (!v) return;
+  // 이미 channelBatch에 있으면 그 항목을 재사용, 없으면 새로 추가
+  let entry = state.channelBatch.videos.find(x => x.video_id === videoId);
+  if (!entry) {
+    entry = {
+      video_id: v.video_id, title: v.title, published_at: v.published_at,
+      video_birth_year: v.video_birth_year ?? null,
+      status: 'pending', unanswered: v.unanswered_count ?? 0,
+      results: [], stats: null, error: '', open: true, truncated: 0,
+    };
+    state.channelBatch.videos.unshift(entry); // 최신 작업이 위로
+  } else {
+    entry.open = true;
+  }
+  render();
+  await processOneVideo(entry);
+  // 결과 영역으로 스크롤
+  setTimeout(() => {
+    const elx = document.getElementById('cbatch-' + entry.video_id);
+    if (elx) elx.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 100);
+}
+
+// 채널의 "모든 영상" 한 번에: 각 영상 순차 처리(미답변 수집 + 초안 생성)
+async function generateForAllVideos() {
+  const videos = state.channel.videos || [];
+  if (!videos.length) { state.error = '먼저 채널을 스캔해 주세요.'; render(); return; }
+  const totalUnanswered = videos.reduce((s, v) => s + (v.unanswered_count || 0), 0);
+  const ok = window.confirm(
+    `답글 필요한 영상 ${videos.length}개의 미답변 댓글 약 ${totalUnanswered}건에 대해\n` +
+    `답글 초안을 한꺼번에 생성합니다.\n\n` +
+    `시간이 다소 걸릴 수 있어요(영상·댓글 수에 따라 수 분).\n진행할까요?`
+  );
+  if (!ok) return;
+
+  // 모든 영상을 channelBatch에 등록(기존 결과는 초기화)
+  state.channelBatch.videos = videos.map(v => ({
+    video_id: v.video_id, title: v.title, published_at: v.published_at,
+    video_birth_year: v.video_birth_year ?? null,
+    status: 'pending', unanswered: v.unanswered_count ?? 0,
+    results: [], stats: null, error: '', open: true, truncated: 0,
+  }));
+  state.channelBatch.running = true;
+  state.channelBatch.total = videos.length;
+  state.channelBatch.done = 0;
+  state.channelBatch.current = '';
+  state.error = '';
+  render();
+  // 첫 결과 영역으로 스크롤
+  setTimeout(() => {
+    const elx = document.getElementById('channel-batch-results');
+    if (elx) elx.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 100);
+
+  // 영상은 순차 처리(서버 rate limit 보호). 영상 내부는 서버가 동시성 4로 처리.
+  for (const entry of state.channelBatch.videos) {
+    state.channelBatch.current = entry.title || entry.video_id;
+    render();
+    await processOneVideo(entry);
+    state.channelBatch.done++;
+    render();
+  }
+  state.channelBatch.running = false;
+  state.channelBatch.current = '';
+  render();
+}
+
+// 영상 하나의 결과를 "댓글 구분선" 포맷으로 합쳐 복사
+function copyVideoBatch(videoId) {
+  const entry = state.channelBatch.videos.find(x => x.video_id === videoId);
+  if (!entry) return;
+  const rows = (entry.results || []).filter(r => r.draft);
+  if (!rows.length) return;
+  const sep = '\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+  const text = rows.map((r, i) => {
+    const head = `【${i + 1}】 @${r.author || ''}  (원댓글: ${(r.text || '').replace(/\s+/g, ' ').slice(0, 60)})`;
+    return `${head}\n\n${r.draft}`;
+  }).join(sep);
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('cbatch-copy-' + videoId);
+    if (btn) { btn.innerHTML = '<i class="fas fa-check mr-2"></i>복사됨!'; setTimeout(() => render(), 1500); }
+  });
+}
+
+// 영상 하나의 특정 초안 1개 복사
+function copyVideoOne(videoId, draftIdx) {
+  const entry = state.channelBatch.videos.find(x => x.video_id === videoId);
+  if (!entry) return;
+  const r = (entry.results || []).filter(x => x.draft)[draftIdx];
+  if (!r) return;
+  navigator.clipboard.writeText(r.draft).then(() => {
+    const btn = document.getElementById('cbatch-one-' + videoId + '-' + draftIdx);
+    if (btn) { btn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => render(), 1200); }
+  });
+}
+
+// 채널 전체 결과를 영상 구분까지 포함해 통째로 복사
+function copyChannelBatchAll() {
+  const blocks = [];
+  for (const entry of state.channelBatch.videos) {
+    const rows = (entry.results || []).filter(r => r.draft);
+    if (!rows.length) continue;
+    const videoSep = '\n\n\n════════════════════════════════════\n';
+    const inner = rows.map((r, i) => {
+      const head = `【${i + 1}】 @${r.author || ''}  (원댓글: ${(r.text || '').replace(/\s+/g, ' ').slice(0, 60)})`;
+      return `${head}\n\n${r.draft}`;
+    }).join('\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n');
+    blocks.push(`▶ ${entry.title || entry.video_id}\n${videoSep}\n${inner}`);
+  }
+  const text = blocks.join('\n\n\n');
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('cbatch-copy-all');
+    if (btn) { btn.innerHTML = '<i class="fas fa-check mr-2"></i>전체 복사됨!'; setTimeout(() => render(), 1500); }
   });
 }
 
@@ -503,18 +668,115 @@ function channelView() {
     ${ch.error ? `<div class="bg-rose-50 text-rose-700 rounded-lg p-3 text-sm"><i class="fas fa-circle-exclamation mr-2"></i>${esc(ch.error)}</div>` : ''}
     ${ch.scanning ? `<div class="text-sm text-stone-500"><span class="spinner"></span> 최근 ${state.maxVideos}개 영상을 살펴보는 중이에요. (30초~1분)</div>` : ''}
     ${(!ch.scanning && ch.stats && !ch.videos.length && !ch.error) ? '<p class="text-sm text-emerald-700"><i class="fas fa-circle-check mr-1"></i>답글이 필요한 미답변 사주 댓글이 있는 영상이 없어요. 모두 처리되었거나 해당 영상이 없습니다.</p>' : ''}
-    ${ch.videos.length ? `<div class="space-y-2 max-h-96 overflow-y-auto">${ch.videos.map(v => `
+    ${ch.videos.length ? `
+    <div class="border border-amber-200 bg-amber-50/60 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
+      <div class="text-sm text-stone-700">
+        <i class="fas fa-bolt text-amber-600 mr-1"></i>
+        <b>영상 ${ch.videos.length}개</b>의 미답변 댓글 ${ch.stats ? ch.stats.total_unanswered : ''}건을 <b>한 번에</b> 모두 생성합니다.
+      </div>
+      <button onclick="window.__genAllVideos()" ${state.channelBatch.running ? 'disabled' : ''}
+        class="text-sm gold-bg text-white rounded-lg px-4 py-2 font-bold hover:opacity-90 disabled:opacity-60 flex items-center gap-2">
+        ${state.channelBatch.running
+          ? `<span class="spinner"></span> 생성 중… (${state.channelBatch.done}/${state.channelBatch.total})`
+          : '<i class="fas fa-layer-group"></i> 전체 영상 답글 한 번에 생성'}
+      </button>
+    </div>` : ''}
+    ${ch.videos.length ? `<div class="space-y-2 max-h-96 overflow-y-auto">${ch.videos.map(v => {
+      const cb = state.channelBatch.videos.find(x => x.video_id === v.video_id);
+      const busy = state.channelBatch.running || (cb && (cb.status === 'loading' || cb.status === 'generating'));
+      let stLabel = '';
+      if (cb) {
+        if (cb.status === 'loading') stLabel = '<span class="text-xs text-amber-600"><span class="spinner"></span> 댓글 수집…</span>';
+        else if (cb.status === 'generating') stLabel = '<span class="text-xs text-amber-600"><span class="spinner"></span> 답글 생성…</span>';
+        else if (cb.status === 'done') stLabel = `<span class="text-xs text-emerald-600">✓ ${(cb.results||[]).filter(r=>r.draft).length}개 생성</span>`;
+        else if (cb.status === 'empty') stLabel = '<span class="text-xs text-stone-400">대상 없음</span>';
+        else if (cb.status === 'error') stLabel = '<span class="text-xs text-rose-500">실패</span>';
+      }
+      return `
       <div class="bg-white/70 border border-stone-200 rounded-lg p-3 flex items-center justify-between gap-3">
         <div class="min-w-0">
           <div class="text-sm text-stone-700 font-medium truncate">${esc(v.title)}</div>
-          <div class="text-xs text-stone-400 mt-0.5">${timeAgo(v.published_at)} ${v.video_birth_year ? `· 제목연도 ${v.video_birth_year}` : ''}</div>
+          <div class="text-xs text-stone-400 mt-0.5">${timeAgo(v.published_at)} ${v.video_birth_year ? `· 제목연도 ${v.video_birth_year}` : ''} ${stLabel ? '· ' + stLabel : ''}</div>
         </div>
-        <div class="flex items-center gap-2 whitespace-nowrap">
+        <div class="flex items-center gap-1.5 whitespace-nowrap">
           <span class="badge bg-rose-100 text-rose-600">미답변 ${v.unanswered_count}</span>
-          <button onclick="window.__pickVideo('${v.video_id}')" class="text-xs gold-bg text-white rounded-lg px-3 py-1.5 font-semibold hover:opacity-90"><i class="fas fa-pen mr-1"></i>답글 달기</button>
+          <button onclick="window.__genVideo('${v.video_id}')" ${busy ? 'disabled' : ''} title="이 영상 미답변 답글 바로 생성"
+            class="text-xs gold-bg text-white rounded-lg px-3 py-1.5 font-semibold hover:opacity-90 disabled:opacity-60"><i class="fas fa-bolt mr-1"></i>바로 생성</button>
+          <button onclick="window.__pickVideo('${v.video_id}')" title="댓글을 열어 하나씩 검토"
+            class="text-xs bg-stone-100 hover:bg-stone-200 text-stone-600 rounded-lg px-3 py-1.5 font-semibold"><i class="fas fa-list-ul mr-1"></i>열기</button>
         </div>
-      </div>`).join('')}</div>` : ''}
-    <p class="text-xs text-stone-400"><i class="fas fa-circle-info mr-1"></i>'답글 달기'를 누르면 아래에 그 영상의 미답변 댓글이 열리고, 한 번에 답글을 생성할 수 있어요.</p>
+      </div>`;
+    }).join('')}</div>` : ''}
+    <p class="text-xs text-stone-400"><i class="fas fa-circle-info mr-1"></i>'바로 생성'은 그 영상의 미답변 답글을 즉시 만들어요. '전체 영상 한 번에'는 모든 영상을 순서대로 처리합니다. '열기'는 댓글을 하나씩 검토할 때 쓰세요.</p>
+  </div>
+  ${channelBatchView()}`;
+}
+
+// 채널 전체/영상별 일괄 생성 결과 (영상마다 카드)
+function channelBatchView() {
+  const cb = state.channelBatch;
+  if (!cb.videos.length) return '';
+  const totalDrafts = cb.videos.reduce((s, e) => s + (e.results || []).filter(r => r.draft).length, 0);
+  return `
+  <div id="channel-batch-results" class="parchment rounded-xl p-5 fade-in space-y-4 mt-5">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h3 class="serif text-lg font-bold gold-text"><i class="fas fa-layer-group mr-2"></i>영상별 일괄 생성 결과</h3>
+      <span class="text-xs text-stone-500">
+        ${cb.running ? `진행 ${cb.done}/${cb.total}` : `영상 ${cb.videos.length}개`} · 답글 ${totalDrafts}개
+      </span>
+    </div>
+    ${cb.running ? `<div class="text-sm text-stone-500"><span class="spinner"></span> ${esc(cb.current || '')} 처리 중… (영상 ${cb.done}/${cb.total})</div>` : ''}
+    ${(!cb.running && totalDrafts > 0) ? `
+      <button id="cbatch-copy-all" onclick="window.__copyChannelBatchAll()" class="w-full bg-stone-800 text-white font-bold py-3 rounded-xl hover:bg-stone-700 transition">
+        <i class="fas fa-copy mr-2"></i>전체 ${totalDrafts}개 답글 복사 (영상·댓글 구분선 포함)
+      </button>` : ''}
+    <div class="space-y-4">
+      ${cb.videos.map(entry => channelBatchVideoCard(entry)).join('')}
+    </div>
+    <p class="text-xs text-stone-400"><i class="fas fa-circle-info mr-1"></i>각 초안은 검토·수정 후 직접 게시하세요. 영상마다 '이 영상 전체 복사'로 옮긴 뒤, 댓글마다 나눠 붙여넣으면 편해요.</p>
+  </div>`;
+}
+
+// 영상 1개의 결과 카드 (2번째 스크린샷 형태)
+function channelBatchVideoCard(entry) {
+  const rows = entry.results || [];
+  const withDraft = rows.filter(r => r.draft);
+  let statusLine = '';
+  if (entry.status === 'pending') statusLine = '<span class="text-xs text-stone-400">대기 중…</span>';
+  else if (entry.status === 'loading') statusLine = '<span class="text-xs text-amber-600"><span class="spinner"></span> 미답변 댓글 수집 중…</span>';
+  else if (entry.status === 'generating') statusLine = '<span class="text-xs text-amber-600"><span class="spinner"></span> 답글을 짓는 중…</span>';
+  else if (entry.status === 'empty') statusLine = '<span class="text-xs text-emerald-700"><i class="fas fa-circle-check mr-1"></i>미답변 사주 댓글이 없어요.</span>';
+  else if (entry.status === 'error') statusLine = `<span class="text-xs text-rose-500"><i class="fas fa-circle-exclamation mr-1"></i>${esc(entry.error||'실패')}</span>`;
+  else if (entry.status === 'done') statusLine = entry.stats ? `<span class="text-xs text-stone-500">생성 ${entry.stats.generated} · 건너뜀 ${entry.stats.skipped} · 실패 ${entry.stats.failed}</span>` : '';
+
+  return `
+  <div id="cbatch-${entry.video_id}" class="border border-stone-200 rounded-xl p-4 bg-white/50 space-y-3">
+    <div class="flex items-center justify-between gap-2 flex-wrap">
+      <div class="min-w-0">
+        <div class="serif font-bold text-stone-700 truncate"><i class="fab fa-youtube text-red-500 mr-1"></i>${esc((entry.title||entry.video_id).slice(0,50))}</div>
+        <div class="mt-0.5">${statusLine}</div>
+      </div>
+      ${withDraft.length ? `<button id="cbatch-copy-${entry.video_id}" onclick="window.__copyVideoBatch('${entry.video_id}')" class="text-xs bg-stone-100 hover:bg-stone-200 rounded-lg px-3 py-1.5 font-semibold whitespace-nowrap"><i class="fas fa-copy mr-1"></i>이 영상 전체 복사</button>` : ''}
+    </div>
+    ${withDraft.length ? `<div class="space-y-3">
+      ${rows.map(r => {
+        const idxDraft = withDraft.indexOf(r);
+        if (r.skipped) return `<div class="bg-stone-50 border border-stone-200 rounded-lg p-3 text-sm opacity-70"><div class="text-xs text-stone-400 mb-1">@${esc(r.author||'')} · 건너뜀(사주 정보 없음)</div><div class="text-stone-600">${esc((r.text||'').slice(0,100))}</div></div>`;
+        if (r.error) return `<div class="bg-rose-50 border border-rose-200 rounded-lg p-3 text-sm"><div class="text-xs text-rose-500 mb-1">@${esc(r.author||'')} · 생성 실패</div><div class="text-stone-600">${esc((r.text||'').slice(0,100))}</div></div>`;
+        const modeBadge = r.mode === 'guide'
+          ? '<span class="badge bg-amber-100 text-amber-700">되묻기</span>'
+          : (r.year_from_title ? '<span class="badge bg-amber-100 text-amber-700">제목연도</span>' : '<span class="badge bg-green-100 text-green-700">풀이</span>');
+        return `<div class="bg-white/80 border border-stone-200 rounded-lg p-3 text-sm space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-xs text-stone-500"><i class="fas fa-user mr-1"></i>${esc(r.author||'')} ${modeBadge} <span class="text-stone-400">${r.draft.length}자</span></div>
+            <button id="cbatch-one-${entry.video_id}-${idxDraft}" onclick="window.__copyVideoOne('${entry.video_id}',${idxDraft})" class="text-xs bg-stone-100 hover:bg-stone-200 rounded-lg px-2 py-1" title="이 답글만 복사"><i class="fas fa-copy"></i></button>
+          </div>
+          <div class="text-xs text-stone-400 bg-stone-50 rounded p-2">원댓글: ${esc((r.text||'').replace(/\s+/g,' ').slice(0,120))}</div>
+          <textarea class="w-full border border-stone-200 rounded-lg p-3 draft-area bg-white/70 text-sm" rows="8">${esc(r.draft)}</textarea>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+    ${(entry.status === 'done' && entry.truncated) ? `<div class="text-xs text-amber-700 bg-amber-50 rounded-lg p-2"><i class="fas fa-triangle-exclamation mr-1"></i>댓글이 많아 앞에서 일부만 처리했어요. 나머지 ${entry.truncated}개는 '열기'로 다시 처리해 주세요.</div>` : ''}
   </div>`;
 }
 
@@ -702,6 +964,11 @@ window.__pickVideo = pickChannelVideo;
 window.__doBatch = doBatchAll;
 window.__copyBatchAll = copyBatchAll;
 window.__copyOneBatch = copyOneBatch;
+window.__genVideo = generateForVideo;
+window.__genAllVideos = generateForAllVideos;
+window.__copyVideoBatch = copyVideoBatch;
+window.__copyVideoOne = copyVideoOne;
+window.__copyChannelBatchAll = copyChannelBatchAll;
 window.__useComment = (i) => {
   const c = state.youtube.list[i];
   state.comment = c.text;
