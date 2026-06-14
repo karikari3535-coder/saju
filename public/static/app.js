@@ -34,6 +34,8 @@ const state = {
   //   running: 전체 실행 중 여부, total/done: 진행률, current: 현재 처리 영상 제목
   //   videos: [{ video_id, title, published_at, video_birth_year, status, unanswered, results, stats, error, open }]
   channelBatch: { running: false, total: 0, done: 0, current: '', videos: [] },
+  // 무시 목록 관리 패널 펼침 여부
+  ignorePanelOpen: false,
 };
 
 function el(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
@@ -56,6 +58,56 @@ function timeAgo(iso) {
   const mo = Math.floor(day / 30);
   if (mo < 12) return `${mo}개월 전`;
   return `${Math.floor(day / 365)}년 전`;
+}
+
+// ============================================================
+// 무시 목록 (이미 답글 단/위치를 못 찾는 댓글) — 브라우저 localStorage 저장
+//   운영자가 "무시"로 체크한 댓글을 모아두고(comment_id 키), 댓글을 다시
+//   불러올 때 목록에서 걸러낸다. 한 기기/브라우저 안에서만 공유된다.
+//   값에는 나중에 관리 패널에서 알아보기 쉽게 작성자·미리보기·시각도 함께 저장.
+// ============================================================
+const IGNORE_KEY = 'saju_ignored_comments_v2';
+
+function loadIgnoreMap() {
+  try {
+    const raw = localStorage.getItem(IGNORE_KEY);
+    if (raw) {
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === 'object') return new Map(Object.entries(obj));
+    }
+    // v1(배열) 마이그레이션: id 배열만 있던 옛 형식
+    const old = localStorage.getItem('saju_ignored_comment_ids_v1');
+    if (old) {
+      const arr = JSON.parse(old);
+      if (Array.isArray(arr)) return new Map(arr.map(id => [id, { author: '', text: '', at: 0 }]));
+    }
+  } catch {}
+  return new Map();
+}
+
+// 메모리 캐시(렌더마다 localStorage 파싱 안 하도록): Map<comment_id, {author,text,at}>
+let ignoreMap = loadIgnoreMap();
+
+function saveIgnoreMap() {
+  try { localStorage.setItem(IGNORE_KEY, JSON.stringify(Object.fromEntries(ignoreMap))); } catch {}
+}
+function isIgnored(id) { return !!id && ignoreMap.has(id); }
+function addIgnore(comment) {
+  const id = typeof comment === 'string' ? comment : comment?.comment_id;
+  if (!id) return;
+  const meta = typeof comment === 'object' && comment
+    ? { author: comment.author || '', text: (comment.text || '').slice(0, 80), at: Date.now() }
+    : { author: '', text: '', at: Date.now() };
+  ignoreMap.set(id, meta);
+  saveIgnoreMap();
+}
+function removeIgnore(id) { if (id) { ignoreMap.delete(id); saveIgnoreMap(); } }
+function clearIgnore() { ignoreMap = new Map(); saveIgnoreMap(); }
+function ignoreCount() { return ignoreMap.size; }
+
+/** comment_id 가 무시 목록에 없는 댓글만 남긴다 */
+function filterIgnored(comments) {
+  return (comments || []).filter(c => !isIgnored(c.comment_id));
 }
 
 // 세션 만료(401 + auth_required) 시 로그인 화면으로 자동 이동
@@ -240,7 +292,8 @@ async function fetchYoutube() {
       params: { videoId: vid, maxPages: 3, onlySaju: true, onlyUnanswered: state.youtube.onlyUnanswered },
     });
     if (data.ok) {
-      state.youtube.list = data.comments;
+      // 무시 목록에 있는 댓글은 빼고 표시
+      state.youtube.list = filterIgnored(data.comments);
       state.youtube.stats = data.stats || null;
       state.youtube.videoTitle = data.video_title || null;
       state.youtube.videoBirthYear = data.video_birth_year ?? null;
@@ -332,7 +385,7 @@ async function processOneVideo(entry) {
       params: { videoId: entry.video_id, maxPages: 3, onlySaju: true, onlyUnanswered: true },
     });
     if (!cd.ok) { entry.status = 'error'; entry.error = cd.error || '댓글 수집 실패'; render(); return; }
-    const list = cd.comments || [];
+    const list = filterIgnored(cd.comments); // 무시 목록 제외
     const birthYear = (cd.video_birth_year ?? entry.video_birth_year) ?? null;
     if (cd.video_title) entry.title = cd.video_title;
     entry.unanswered = list.length;
@@ -802,7 +855,10 @@ function youtubeView() {
             <span>♥ ${c.like_count} · 답글 ${c.reply_count}</span>
           </div>
           <div class="text-stone-700">${esc(c.text).slice(0,180)}</div>
-          <button onclick="window.__useComment(${y.list.indexOf(c)})" class="mt-2 text-xs gold-text font-semibold hover:underline"><i class="fas fa-arrow-up-right-from-square mr-1"></i>이 댓글로 하나만 작성</button>
+          <div class="mt-2 flex items-center gap-3 flex-wrap">
+            <button onclick="window.__useComment(${y.list.indexOf(c)})" class="text-xs gold-text font-semibold hover:underline"><i class="fas fa-arrow-up-right-from-square mr-1"></i>이 댓글로 하나만 작성</button>
+            <button onclick="window.__ignoreComment(${y.list.indexOf(c)})" class="text-xs text-stone-400 hover:text-rose-500 font-medium" title="이미 답글을 달았거나 답글 위치를 못 찾는 댓글입니다. 다음부터 불러오지 않습니다."><i class="fas fa-eye-slash mr-1"></i>무시(이미 답글 달았어요)</button>
+          </div>
         </div>`).join('')}</div>` : (y.loading ? '<p class="text-xs text-stone-400"><span class="spinner"></span> 댓글을 불러오는 중…</p>' : '<p class="text-xs text-stone-400">미답변 사주 댓글이 없습니다.</p>')}
 
       ${y.list.length ? `
@@ -817,6 +873,37 @@ function youtubeView() {
       </div>` : ''}
     </div>
   </details>`;
+}
+
+// 무시 목록 관리 뷰 — 무시한 댓글이 1건이라도 있을 때만 표시
+function ignoreListView() {
+  const n = ignoreCount();
+  if (!n) return '';
+  const open = state.ignorePanelOpen;
+  const entries = [...ignoreMap.entries()].sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+  return `
+  <div class="parchment rounded-xl p-5">
+    <div class="flex items-center justify-between gap-2 flex-wrap">
+      <button onclick="window.__toggleIgnorePanel()" class="serif font-bold text-stone-600 hover:text-stone-800 flex items-center gap-2">
+        <i class="fas fa-eye-slash text-stone-400"></i>
+        무시한 댓글 <span class="badge bg-stone-200 text-stone-600">${n}건</span>
+        <i class="fas fa-chevron-${open ? 'up' : 'down'} text-xs text-stone-400"></i>
+      </button>
+      ${open ? `<button onclick="window.__clearIgnore()" class="text-xs text-rose-500 hover:underline font-medium"><i class="fas fa-trash-can mr-1"></i>모두 해제</button>` : ''}
+    </div>
+    <p class="text-xs text-stone-400 mt-1"><i class="fas fa-circle-info mr-1"></i>여기 있는 댓글은 다음에 영상을 다시 불러와도 목록에 나타나지 않아요. (이 브라우저에만 저장됩니다)</p>
+    ${open ? `
+    <div class="mt-3 space-y-2 max-h-64 overflow-y-auto">
+      ${entries.map(([id, m]) => `
+        <div class="bg-white/70 border border-stone-200 rounded-lg p-3 text-sm flex justify-between items-start gap-3">
+          <div class="min-w-0">
+            <div class="text-xs text-stone-400">${m.author ? esc(m.author) : '(작성자 정보 없음)'}${m.at ? ' · ' + timeAgo(new Date(m.at).toISOString()) + ' 무시함' : ''}</div>
+            <div class="text-stone-600 truncate">${m.text ? esc(m.text) : '<span class=\"text-stone-400\">(미리보기 없음)</span>'}</div>
+          </div>
+          <button onclick="window.__unignoreComment('${esc(id)}')" class="text-xs gold-text font-semibold hover:underline whitespace-nowrap"><i class="fas fa-rotate-left mr-1"></i>해제</button>
+        </div>`).join('')}
+    </div>` : ''}
+  </div>`;
 }
 
 // 일괄 생성 결과 뷰
@@ -921,6 +1008,7 @@ function render() {
       ${inputView()}
       ${channelView()}
       ${youtubeView()}
+      ${ignoreListView()}
       ${batchView()}
       ${analysisView()}
       ${draftView()}
@@ -981,6 +1069,28 @@ window.__useComment = (i) => {
   if (top) top.scrollIntoView({ behavior: 'smooth', block: 'start' });
   doAnalyze();
 };
+
+// 댓글 무시: 목록에 추가하고 현재 화면에서도 즉시 제거 (인덱스로 받아 작성자·텍스트도 저장)
+window.__ignoreComment = (i) => {
+  const c = (state.youtube.list || [])[i];
+  if (!c || !c.comment_id) return;
+  const id = c.comment_id;
+  addIgnore(c);
+  state.youtube.list = (state.youtube.list || []).filter(x => x.comment_id !== id);
+  render();
+};
+// 무시 목록에서 특정 댓글 해제
+window.__unignoreComment = (id) => { removeIgnore(id); render(); };
+// 무시 목록 전체 비우기
+window.__clearIgnore = () => {
+  if (!ignoreSet.size) return;
+  if (window.confirm(`무시 목록 ${ignoreSet.size}건을 모두 해제할까요?\n해제하면 다음에 댓글을 다시 불러올 때 그 댓글들이 목록에 다시 나타납니다.`)) {
+    clearIgnore();
+    render();
+  }
+};
+// 무시 목록 패널 펼침/접힘 토글
+window.__toggleIgnorePanel = () => { state.ignorePanelOpen = !state.ignorePanelOpen; render(); };
 
 loadStatus();
 render();
