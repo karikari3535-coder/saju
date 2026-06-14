@@ -226,13 +226,30 @@ function extractDate(
     return normalizeDate(year, +s.slice(2, 4), +s.slice(4, 6), ambiguity)
   }
 
-  // 패턴 D: 연도 없이 "5월 15일"만 → 월·일만 추출 (연도는 null → guide)
+  // 패턴 D: 연도 없이 "5월 15일"만 → 월·일만 추출 (연도는 null → 영상연도 폴백 대상)
   m = text.match(/(?<!\d)(\d{1,2})\s*월\s*(\d{1,2})\s*일/)
   if (m) {
     const month = +m[1]
     const day = +m[2]
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
       return { year: null, month, day }
+    }
+  }
+
+  // 패턴 D2: 연도 없이 "4.12" / "4-12" / "4/12" (점·하이픈·슬래시 월·일)
+  //   "4.12음력 아침6~7시생" 같은 댓글을 잡는다. 오탐을 줄이기 위해
+  //   출생 맥락 단어(생/태어/음력/양력/시/때)가 댓글에 함께 있을 때만 월·일로 인정한다.
+  //   또 시각(6~7시)·소수와 헷갈리지 않게 '시'·':'·추가 숫자가 바로 뒤따르지 않는
+  //   1~12 / 1~31 조합만 받는다.
+  if (/(생|태어|태여|음력|양력|시|때)/.test(text)) {
+    m = text.match(/(?<![\d.])(\d{1,2})\s*[.\-\/]\s*(\d{1,2})(?!\s*[.\-\/:]?\s*\d)(?!\s*시)/)
+    if (m) {
+      const month = +m[1]
+      const day = +m[2]
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        ambiguity.push(`'${m[0].trim()}'을(를) ${month}월 ${day}일로 봤어요.`)
+        return { year: null, month, day }
+      }
     }
   }
 
@@ -310,9 +327,10 @@ function extractTime(
       ambiguity.push(`시각(${m[0].trim()})을 해석하기 어려워요. 확인해 주세요.`)
       return { hour: null, minute: null, estimated: false }
     }
-    if (!ampm && +m[2] <= 12) {
-      ambiguity.push(`오전/오후 표시가 없어 ${h}시로 봤어요. 확인해 주세요.`)
-      return { hour: h, minute: min, estimated: true }
+    // 오전/오후 표시가 없으면 24시간제로 그대로 해석한다.
+    //   (예: "5시"=오전 5시, "17시"=오후 5시) → 되묻지 않고 확정값으로 사용.
+    if (!ampm) {
+      return { hour: h, minute: min, estimated: false }
     }
     return { hour: h, minute: min, estimated: false }
   }

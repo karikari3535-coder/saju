@@ -121,6 +121,7 @@ async function doDraft() {
       hour: inp.hour, minute: inp.minute,
       gender: inp.gender, calendar: inp.calendar,
       yearFromTitle: state.analysis.year_from_title ?? false,
+      videoBirthYear: state.youtube.videoBirthYear ?? null,
     });
     if (data.ok) state.draft = data.draft;
     else state.error = data.error || 'AI 초안 생성 실패';

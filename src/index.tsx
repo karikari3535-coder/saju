@@ -266,10 +266,19 @@ app.post('/api/draft', async (c) => {
     return c.json({ ok: false, error: '잘못된 요청(JSON)이에요.' }, 400)
   }
   const comment: string = body.comment ?? ''
-  const yearFromTitle = !!body.yearFromTitle
-
   const parsed = parseComment(comment)
-  if (yearFromTitle && body.year && parsed.year == null) {
+
+  // 영상 제목 연도 폴백: 댓글에 연도가 없으면 영상 제목 연도(videoBirthYear)로 가정한다.
+  //   (analyze / batch 와 동일 규칙으로 통일)
+  let yearFromTitle = !!body.yearFromTitle
+  const videoBirthYear = num(body.videoBirthYear)
+  if (parsed.year == null && videoBirthYear != null) {
+    parsed.year = videoBirthYear
+    parsed.yearFromTitle = true
+    yearFromTitle = true
+    parsed.missingFields = parsed.missingFields.filter((f) => !f.includes('연도'))
+    parsed.found = parsed.missingFields.length === 0
+  } else if (yearFromTitle && body.year && parsed.year == null) {
     parsed.year = num(body.year)
     parsed.yearFromTitle = true
   }
