@@ -91,7 +91,8 @@ curl http://localhost:3000        # 로그인 활성화 시 401(로그인 화면
 ## 배포
 - **플랫폼**: Cloudflare Workers (Genspark 호스팅)
 - **운영 URL**: https://5d4f2df2-0e67-4bfa-8d04-04c9e806ebe3.vip.gensparksite.com (🔒 로그인 필요)
-- **상태**: ✅ 배포 완료 — 비밀번호 보호 활성, 인증/analyze 전 모드 production 검증 완료
+- **상태**: ✅ 배포 완료 — 비밀번호 보호 활성, AI 답글 생성·유튜브 연동·analyze 전 모드 production 검증 완료
+  (`anthropic_configured: true`, `youtube_configured: true`, 초안 생성 1,575자 정상)
 - **환경변수 주입**: 비밀번호 등 `vars`는 `wrangler.jsonc`(git 미추적)로 주입.
   공개용 예시는 `wrangler.example.jsonc` 참고. (`ANTHROPIC_API_KEY`/`YOUTUBE_API_KEY`도 같은 방식으로 추가)
 - **기술 스택**: Hono + TypeScript + Vite + manseryeok + TailwindCSS(CDN)
