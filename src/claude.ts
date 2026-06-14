@@ -61,18 +61,23 @@ export async function generateDraft(
 export interface ExtractedComment {
   author: string
   text: string
+  /** 댓글 오른쪽 영상 정보에서 읽어낸 "○○○○년생" 출생연도 (없으면 null) */
+  videoYear?: number | null
 }
 
 const OCR_SYSTEM = [
   '너는 유튜브 댓글/커뮤니티 관리 화면 스크린샷에서 시청자 댓글을 정확히 읽어내는 OCR 도우미다.',
   '화면에는 여러 개의 댓글이 세로로 나열되어 있을 수 있다. 각 댓글을 하나씩 분리해서 읽어라.',
-  '각 댓글에서 작성자 이름(author)과 댓글 본문(text)을 구분해 추출한다.',
-  '- 작성자 이름 옆의 "· N개월 전 / N주 전" 같은 시간 표시, "답글", 좋아요 수, 하트, 메뉴(⋮) 같은 UI 요소는 본문에서 제외한다.',
-  '- 오른쪽에 보이는 영상 썸네일/영상 제목 영역의 글자는 댓글 본문이 아니므로 무시한다.',
+  '각 댓글에서 다음 3가지를 추출한다:',
+  '1) author: 작성자 이름',
+  '2) text: 댓글 본문 (작성자 옆 "· N개월 전" 시간 표시, "답글", 좋아요 수, 하트, 메뉴(⋮) 같은 UI 요소는 제외)',
+  '3) video_year: 그 댓글 "오른쪽"에 붙어 있는 영상 썸네일/제목 영역에 "○○○○년생"(예: "1969년생", "1969 년생") 형태로 적힌 출생연도가 보이면 그 4자리 숫자(예: 1969). 보이지 않거나 출생연도가 아니면 null.',
+  '- video_year는 반드시 "○○○○년생" 형태의 출생연도일 때만 채운다. 영상 업로드 연도·조회수·기타 숫자를 출생연도로 착각하지 마라.',
+  '- 각 댓글과 같은 가로줄(행)에 있는 영상 정보만 그 댓글의 video_year로 연결한다. 다른 줄의 영상과 섞지 마라.',
   '- 줄바꿈이 있는 댓글은 자연스럽게 한 덩어리로 합친다.',
   '- 글자가 잘렸거나 흐려서 확신이 없으면, 보이는 만큼만 최대한 정확히 옮긴다(추측해서 지어내지 마라).',
   '반드시 아래 JSON 형식만 출력한다. 설명·머리말·코드블록 표시 없이 JSON 객체 하나만:',
-  '{"comments":[{"author":"작성자","text":"댓글 본문"}, ...]}',
+  '{"comments":[{"author":"작성자","text":"댓글 본문","video_year":1969}, ...]}',
   '읽을 수 있는 시청자 댓글이 하나도 없으면 {"comments":[]} 를 출력한다.',
 ].join('\n')
 
@@ -106,7 +111,7 @@ export async function extractCommentsFromImage(
           },
           {
             type: 'text',
-            text: '이 스크린샷에 보이는 모든 시청자 댓글을 작성자와 본문으로 나눠 JSON으로 추출해줘.',
+            text: '이 스크린샷에 보이는 모든 시청자 댓글을 작성자·본문으로 나누고, 오른쪽 영상 정보에 "○○○○년생" 출생연도가 있으면 video_year로 함께 JSON으로 추출해줘.',
           },
         ],
       },
@@ -153,9 +158,18 @@ export async function extractCommentsFromImage(
 
   const list: any[] = Array.isArray(parsed?.comments) ? parsed.comments : []
   return list
-    .map((it) => ({
-      author: String(it?.author ?? '').trim(),
-      text: String(it?.text ?? '').trim(),
-    }))
+    .map((it) => {
+      // video_year: 4자리 출생연도만 채택 (1900~현재연도+1 범위 가드)
+      let vy: number | null = null
+      const rawVy = it?.video_year
+      const n = typeof rawVy === 'number' ? rawVy : parseInt(String(rawVy ?? ''), 10)
+      const nowY = new Date().getFullYear()
+      if (Number.isFinite(n) && n >= 1900 && n <= nowY + 1) vy = n
+      return {
+        author: String(it?.author ?? '').trim(),
+        text: String(it?.text ?? '').trim(),
+        videoYear: vy,
+      }
+    })
     .filter((it) => it.text.length > 0)
 }

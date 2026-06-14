@@ -428,7 +428,11 @@ async function runOcrExtract() {
   try {
     const { data } = await axios.post('/api/ocr-comments', { image: state.ocr.image });
     if (data.ok) {
-      state.ocr.items = (data.comments || []).map(c => ({ author: c.author || '', text: c.text || '' }));
+      state.ocr.items = (data.comments || []).map(c => ({
+        author: c.author || '',
+        text: c.text || '',
+        videoYear: (c.videoYear != null ? String(c.videoYear) : ''),
+      }));
       if (!state.ocr.items.length) state.ocr.error = '이미지에서 읽을 수 있는 댓글을 찾지 못했어요. 더 선명하게(글자가 크게 보이게) 캡쳐해 주세요.';
     } else {
       state.ocr.error = data.error || '이미지 분석 실패';
@@ -447,7 +451,7 @@ function ocrClear() {
 
 function ocrAddItem() {
   if (!state.ocr.items) state.ocr.items = [];
-  state.ocr.items.push({ author: '', text: '' });
+  state.ocr.items.push({ author: '', text: '', videoYear: '' });
   render();
 }
 
@@ -459,7 +463,16 @@ function ocrRemoveItem(i) {
 
 // 검토 완료된 댓글들을 일괄 생성 (영상 제목 연도 폴백 없음 — 댓글 자체 정보로만)
 async function ocrGenerate() {
-  const items = (state.ocr.items || []).filter(it => (it.text || '').trim());
+  const items = (state.ocr.items || [])
+    .filter(it => (it.text || '').trim())
+    .map(it => {
+      const vy = parseInt((it.videoYear || '').trim(), 10);
+      return {
+        author: it.author || '',
+        text: it.text || '',
+        videoBirthYear: (Number.isFinite(vy) && vy >= 1900 && vy <= new Date().getFullYear() + 1) ? vy : null,
+      };
+    });
   if (!items.length) { state.ocr.error = '생성할 댓글이 없어요.'; render(); return; }
   state.ocr.batch = { running: true, results: [], stats: null, error: '' };
   state.ocr.error = ''; render();
@@ -1137,9 +1150,14 @@ function ocrReviewView() {
             <button onclick="window.__ocrRemove(${i})" class="text-stone-400 hover:text-rose-500 px-2" title="이 댓글 삭제"><i class="fas fa-trash-can"></i></button>
           </div>
           <textarea data-ocr-text="${i}" rows="2" placeholder="댓글 본문 (생년월일·질문 등)" class="w-full border border-stone-200 rounded-lg p-2 text-sm">${esc(it.text)}</textarea>
+          <div class="flex items-center gap-2 text-xs">
+            <label class="text-stone-500 whitespace-nowrap"><i class="fas fa-clapperboard mr-1 text-amber-500"></i>영상 출생연도</label>
+            <input data-ocr-vyear="${i}" value="${esc(it.videoYear || '')}" placeholder="예: 1969" maxlength="4" inputmode="numeric" class="w-24 border border-stone-200 rounded-lg px-2 py-1.5" />
+            ${it.videoYear ? `<span class="badge bg-amber-100 text-amber-700">OCR 인식</span>` : `<span class="text-stone-400">댓글에 연도 없으면 이 연도로 풀어요</span>`}
+          </div>
         </div>`).join('')}
     </div>
-    <p class="text-xs text-stone-400"><i class="fas fa-circle-info mr-1"></i>OCR이 글자를 잘못 읽었을 수 있어요. 특히 <b>생년월일·연도</b>가 정확한지 꼭 확인해 주세요. 사주 단서(연/월/일)가 없는 댓글은 자동으로 '되묻기' 답글이 만들어져요.</p>
+    <p class="text-xs text-stone-400"><i class="fas fa-circle-info mr-1"></i>OCR이 글자를 잘못 읽었을 수 있어요. 특히 <b>생년월일·연도</b>가 정확한지 꼭 확인해 주세요. <b>댓글에 연도가 없어도 '영상 출생연도'가 있으면 그 연도(연주)로 풀이</b>하고, 월·일까지 없으면 어쩔 수 없이 '되묻기' 답글이 만들어져요.</p>
     <button onclick="window.__ocrGenerate()" ${o.batch.running ? 'disabled' : ''}
       class="w-full gold-bg text-white font-bold py-3 rounded-xl hover:opacity-90 transition disabled:opacity-60 flex items-center justify-center gap-2">
       ${o.batch.running ? '<span class="spinner"></span> 답글 짓는 중…' : `<i class="fas fa-wand-magic-sparkles"></i> ${valid}건 답글 한꺼번에 짓기`}
@@ -1184,7 +1202,7 @@ function ocrResultsView() {
         }
         const modeBadge = r.mode === 'guide'
           ? '<span class="badge bg-amber-100 text-amber-700">되묻기</span>'
-          : '<span class="badge bg-green-100 text-green-700">풀이</span>';
+          : (r.year_from_title ? '<span class="badge bg-amber-100 text-amber-700">영상연도</span>' : '<span class="badge bg-green-100 text-green-700">풀이</span>');
         return `<div class="bg-white/70 border border-stone-200 rounded-lg p-3 text-sm space-y-2">
           <div class="flex items-center justify-between gap-2">
             <div class="text-xs text-stone-500"><i class="fas fa-user mr-1"></i>${esc(r.author||'')} ${modeBadge} <span class="text-stone-400">${r.draft.length}자</span></div>
@@ -1312,6 +1330,9 @@ function render() {
   });
   document.querySelectorAll('[data-ocr-text]').forEach(elx => {
     elx.addEventListener('input', e => { const i = +elx.getAttribute('data-ocr-text'); if (state.ocr.items && state.ocr.items[i]) state.ocr.items[i].text = e.target.value; });
+  });
+  document.querySelectorAll('[data-ocr-vyear]').forEach(elx => {
+    elx.addEventListener('input', e => { const i = +elx.getAttribute('data-ocr-vyear'); if (state.ocr.items && state.ocr.items[i]) state.ocr.items[i].videoYear = e.target.value.replace(/[^0-9]/g, ''); });
   });
 }
 

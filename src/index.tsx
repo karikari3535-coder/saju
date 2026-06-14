@@ -402,7 +402,7 @@ app.post('/api/batch', async (c) => {
   } catch {
     return c.json({ ok: false, error: '잘못된 요청(JSON)이에요.' }, 400)
   }
-  const allItems: Array<{ comment_id?: string; author?: string; text?: string; published_at?: string }> =
+  const allItems: Array<{ comment_id?: string; author?: string; text?: string; published_at?: string; videoBirthYear?: number | null }> =
     Array.isArray(body.items) ? body.items : []
   const MAX = 20
   const items = allItems.slice(0, MAX)
@@ -432,10 +432,13 @@ app.post('/api/batch', async (c) => {
       try {
         const parsed = parseComment(text)
 
-        // 영상 제목 연도 폴백
+        // 영상(제목/썸네일) 연도 폴백 — 댓글별 연도(item.videoBirthYear)가 있으면 우선,
+        //   없으면 요청 전체 공통 videoBirthYear 사용
+        const itemYear = num(item.videoBirthYear)
+        const fallbackYear = itemYear != null ? itemYear : videoBirthYear
         let yearFromTitle = false
-        if (parsed.year == null && videoBirthYear != null) {
-          parsed.year = videoBirthYear
+        if (parsed.year == null && fallbackYear != null) {
+          parsed.year = fallbackYear
           parsed.yearFromTitle = true
           yearFromTitle = true
           parsed.missingFields = parsed.missingFields.filter((f) => !f.includes('연도'))
