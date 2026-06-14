@@ -23,7 +23,7 @@
 - **유튜브**: YouTube Data API v3 (읽기 전용)
 
 ## 기능 진입 URI (경로 · 파라미터)
-인증이 켜진 경우(SITE_PASSWORD 설정) 모든 경로는 로그인 필요. 미인증 API는 `401 {auth_required:true}`.
+인증이 켜진 경우(`SITE_PASSWORD` 또는 `APP_PASSWORD` 설정) 모든 경로는 로그인 필요. 미인증 API는 `401 {auth_required:true}`.
 
 | 메서드 | 경로 | 설명 | 주요 파라미터 |
 |---|---|---|---|
@@ -75,7 +75,7 @@
 | `ANTHROPIC_API_KEY` | ✅(초안 생성 시) | Claude API 키 |
 | `CLAUDE_MODEL` | 선택 | 기본 `claude-sonnet-4-6` |
 | `YOUTUBE_API_KEY` | 선택 | 유튜브 댓글/채널 수집용 |
-| `SITE_PASSWORD` | 권장 | 설정 시 로그인 보호 활성화 (미설정 시 공개) |
+| `SITE_PASSWORD` 또는 `APP_PASSWORD` | 권장 | 설정 시 로그인 보호 활성화 (미설정 시 공개). 두 이름 모두 인식하며 `SITE_PASSWORD` 우선 |
 
 로컬: `cp .dev.vars.example .dev.vars` 후 값 채우기.
 배포: `npx wrangler pages secret put ANTHROPIC_API_KEY` 등으로 등록.
@@ -92,7 +92,7 @@ curl http://localhost:3000        # 로그인 활성화 시 401(로그인 화면
 - **플랫폼**: Cloudflare Pages
 - **상태**: 로컬 검증 완료 (✅ 빌드/인증/analyze 전 모드/SPA 렌더 확인)
 - **기술 스택**: Hono + TypeScript + Vite + manseryeok + TailwindCSS(CDN)
-- **최종 수정**: 2026-06-14 (원본 사이트 사양에 맞춰 전면 재정렬)
+- **최종 수정**: 2026-06-14 (개발 로그 대조 보완: ① `APP_PASSWORD`/`SITE_PASSWORD` 양쪽 지원, ② "○○년생" 연도만 댓글 추출→guide 되묻기, ③ 시스템 프롬프트에 현재 연도·세운(올해 2026 병오년) 컨텍스트 동적 주입)
 
 ## 미구현 / 다음 단계
 - 답글 패턴 회전(rotation) 상태 영속화 (현재 무상태)

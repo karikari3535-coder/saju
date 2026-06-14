@@ -236,6 +236,22 @@ function extractDate(
     }
   }
 
+  // 패턴 E: 연도만 — "1990년생", "69년생", "69년 생" (월·일 없음 → guide 유도)
+  //   "저 69년생 닭띠 여자예요" 처럼 연도만 있는 경우를 잡는다.
+  //   4자리 연도 우선.
+  m = text.match(/(?<!\d)(19\d{2}|20\d{2})\s*년\s*생/)
+  if (m) {
+    return { year: +m[1], month: null, day: null }
+  }
+  // 2자리 연도 + 년생 (예: 69년생)
+  m = text.match(/(?<!\d)(\d{2})\s*년\s*생/)
+  if (m) {
+    const yy = +m[1]
+    const year = yy <= 25 ? 2000 + yy : 1900 + yy
+    ambiguity.push(`연도를 2자리(${m[1]})로 적어 ${year}년으로 추정했어요. 확인해 주세요.`)
+    return { year, month: null, day: null }
+  }
+
   return { year: null, month: null, day: null }
 }
 

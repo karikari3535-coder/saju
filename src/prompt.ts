@@ -15,6 +15,29 @@ import type { SajuResult } from './saju'
 
 export const PROMPT_VERSION = 'v3.8'
 
+/**
+ * 현재 연도/세운(歲運) 컨텍스트.
+ * 시기·대운 풀이 시 AI가 "올해"를 정확히 인식하도록 시스템 프롬프트에 주입한다.
+ * (모델 학습 시점과 무관하게 항상 올바른 현재 연도를 쓰게 함)
+ */
+function currentYearContext(): string {
+  const now = new Date()
+  const year = now.getFullYear()
+  // 60갑자 세운: 1984=갑자(甲子) 기준
+  const STEMS = ['갑', '을', '병', '정', '무', '기', '경', '신', '임', '계']
+  const STEM_HJ = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']
+  const BRANCHES = ['자', '축', '인', '묘', '진', '사', '오', '미', '신', '유', '술', '해']
+  const BRANCH_HJ = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥']
+  const si = (year - 1984) % 10
+  const bi = (year - 1984) % 12
+  const s = (si + 10) % 10
+  const b = (bi + 12) % 12
+  const ganji = `${STEMS[s]}${BRANCHES[b]}년(${STEM_HJ[s]}${BRANCH_HJ[b]})`
+  return `올해는 ${year}년 ${ganji}입니다. 시기·대운·세운을 말할 때 이 현재 연도를 기준으로 삼으세요.`
+}
+
+export const CURRENT_YEAR_CONTEXT = currentYearContext()
+
 /** 답글 회전 상태(패턴 반복 회피용). 현재 무상태라 호출자가 주입. */
 export interface RotationState {
   recentOpenings?: string[]
@@ -54,7 +77,11 @@ export const SYSTEM_PROMPT = `당신은 유튜브 채널 "천기누설 만신보
 
 [출력 형식]
 - 유튜브 댓글에 그대로 붙여넣을 수 있는 **순수 텍스트 답글만** 출력한다.
-- 머리말("다음은 답글입니다") · 코드블록 금지.`
+- 머리말("다음은 답글입니다") · 코드블록 금지.
+
+[현재 시점]
+- ${CURRENT_YEAR_CONTEXT}
+- "올해", "내년", "요즘 운" 등을 말할 때 절대 과거 연도를 쓰지 마라.`
 
 // ─────────────────────────────────────────────────────────────────
 // 2) 데이터블록 (코드 → AI 다리)

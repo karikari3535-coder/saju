@@ -4,7 +4,8 @@
  * 반자동(human-in-the-loop): 코드가 계산하고 AI가 초안을 쓰면, 운영자가 검토 후 게시.
  *
  * 보안: 운영자 전용 — 비밀번호 로그인.
- *   auth 쿠키 = sha256(SITE_PASSWORD) 16진수. 모든 라우트(/api 포함) 보호.
+ *   auth 쿠키 = sha256(비밀번호) 16진수. 모든 라우트(/api 포함) 보호.
+ *   비밀번호 환경변수: SITE_PASSWORD 또는 APP_PASSWORD(둘 다 지원).
  *   미인증 시 API는 401 {auth_required:true}, 페이지는 로그인 화면.
  */
 
@@ -25,7 +26,9 @@ type Bindings = {
   ANTHROPIC_API_KEY?: string
   CLAUDE_MODEL?: string
   YOUTUBE_API_KEY?: string
+  /** 운영자 비밀번호 — SITE_PASSWORD 또는 APP_PASSWORD 둘 다 인식 */
   SITE_PASSWORD?: string
+  APP_PASSWORD?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -44,9 +47,14 @@ async function sha256Hex(s: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-/** 로그인 시스템이 켜져 있는지 (SITE_PASSWORD 설정 시) */
+/** 설정된 운영자 비밀번호 (SITE_PASSWORD 우선, 없으면 APP_PASSWORD) */
+function sitePassword(c: any): string | undefined {
+  return c.env.SITE_PASSWORD || c.env.APP_PASSWORD
+}
+
+/** 로그인 시스템이 켜져 있는지 (비밀번호 설정 시) */
 function authEnabled(c: any): boolean {
-  return !!c.env.SITE_PASSWORD
+  return !!sitePassword(c)
 }
 
 /** 현재 요청이 인증되었는지 */
@@ -54,7 +62,7 @@ async function isAuthed(c: any): Promise<boolean> {
   if (!authEnabled(c)) return true // 비밀번호 미설정이면 공개
   const cookie = getCookie(c, COOKIE_NAME)
   if (!cookie) return false
-  const expected = await sha256Hex(c.env.SITE_PASSWORD)
+  const expected = await sha256Hex(sitePassword(c)!)
   return cookie === expected
 }
 
@@ -65,8 +73,9 @@ app.post('/login', async (c) => {
   if (!authEnabled(c)) return c.redirect('/', 302)
   const body = await c.req.parseBody()
   const password = String(body.password ?? '')
-  if (password && password === c.env.SITE_PASSWORD) {
-    const token = await sha256Hex(c.env.SITE_PASSWORD!)
+  const expected = sitePassword(c)
+  if (password && password === expected) {
+    const token = await sha256Hex(expected!)
     setCookie(c, COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: 'Lax',
