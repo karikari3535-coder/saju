@@ -31,6 +31,34 @@ type Bindings = {
   APP_PASSWORD?: string
 }
 
+// ─────────────────────────────────────────────────────────────────
+// 빌드 타임 인라인 시크릿 (옵션 A)
+//   vite.config.ts 의 define 으로 빌드 시 주입된다. wrangler `vars` 를
+//   비워도 동작하도록, 런타임에서 c.env 값이 없으면 이 인라인 값으로 폴백한다.
+//   (vars/secret 이 채워져 있으면 그쪽이 우선 — env 우선)
+// ─────────────────────────────────────────────────────────────────
+declare const __INLINE_ANTHROPIC_API_KEY__: string
+declare const __INLINE_YOUTUBE_API_KEY__: string
+declare const __INLINE_SITE_PASSWORD__: string
+declare const __INLINE_CLAUDE_MODEL__: string
+
+/** env 값이 있으면 우선, 없으면 빌드 인라인 값으로 폴백한다(빈 문자열은 미설정으로 취급). */
+function envOrInline(envVal: string | undefined, inlineVal: string): string | undefined {
+  if (envVal && envVal.length > 0) return envVal
+  if (inlineVal && inlineVal.length > 0) return inlineVal
+  return undefined
+}
+
+function anthropicKey(c: any): string | undefined {
+  return envOrInline(c.env.ANTHROPIC_API_KEY, __INLINE_ANTHROPIC_API_KEY__)
+}
+function youtubeKey(c: any): string | undefined {
+  return envOrInline(c.env.YOUTUBE_API_KEY, __INLINE_YOUTUBE_API_KEY__)
+}
+function claudeModel(c: any): string {
+  return envOrInline(c.env.CLAUDE_MODEL, __INLINE_CLAUDE_MODEL__) || DEFAULT_MODEL
+}
+
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.use('*', logger())
@@ -47,9 +75,9 @@ async function sha256Hex(s: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-/** 설정된 운영자 비밀번호 (SITE_PASSWORD 우선, 없으면 APP_PASSWORD) */
+/** 설정된 운영자 비밀번호 (SITE_PASSWORD → APP_PASSWORD → 빌드 인라인 순) */
 function sitePassword(c: any): string | undefined {
-  return c.env.SITE_PASSWORD || c.env.APP_PASSWORD
+  return c.env.SITE_PASSWORD || c.env.APP_PASSWORD || envOrInline(undefined, __INLINE_SITE_PASSWORD__)
 }
 
 /** 로그인 시스템이 켜져 있는지 (비밀번호 설정 시) */
@@ -172,9 +200,9 @@ function mergeInput(parsed: ReturnType<typeof parseComment>, body: any): SajuInp
 app.get('/api/status', (c) => {
   return c.json({
     ok: true,
-    anthropic_configured: !!c.env.ANTHROPIC_API_KEY,
-    youtube_configured: !!c.env.YOUTUBE_API_KEY,
-    model: c.env.CLAUDE_MODEL || DEFAULT_MODEL,
+    anthropic_configured: !!anthropicKey(c),
+    youtube_configured: !!youtubeKey(c),
+    model: claudeModel(c),
   })
 })
 
@@ -253,7 +281,8 @@ app.post('/api/analyze', async (c) => {
 //   응답: { ok, draft }  (원본 계약)
 // ─────────────────────────────────────────────────────────────────
 app.post('/api/draft', async (c) => {
-  if (!c.env.ANTHROPIC_API_KEY) {
+  const apiKey = anthropicKey(c)
+  if (!apiKey) {
     return c.json(
       { ok: false, error: 'ANTHROPIC_API_KEY가 설정되지 않았어요. (.dev.vars 또는 secret 설정)' },
       400,
@@ -286,10 +315,10 @@ app.post('/api/draft', async (c) => {
   const saju = computeSaju(input)
 
   const block = buildDataBlock(comment, parsed, saju, { yearFromTitle })
-  const model = c.env.CLAUDE_MODEL || DEFAULT_MODEL
+  const model = claudeModel(c)
 
   try {
-    const draft = await generateDraft(c.env.ANTHROPIC_API_KEY, model, block)
+    const draft = await generateDraft(apiKey, model, block)
     return c.json({ ok: true, draft: draft.text, mode: saju.mode })
   } catch (e: any) {
     return c.json({ ok: false, error: e?.message ?? 'AI 호출 실패' }, 502)
@@ -301,7 +330,8 @@ app.post('/api/draft', async (c) => {
 //   응답: { ok, comments, stats, video_title, video_birth_year }
 // ─────────────────────────────────────────────────────────────────
 app.get('/api/youtube/comments', async (c) => {
-  if (!c.env.YOUTUBE_API_KEY) {
+  const ytKey = youtubeKey(c)
+  if (!ytKey) {
     return c.json({ ok: false, error: 'YOUTUBE_API_KEY가 설정되지 않았어요.' }, 400)
   }
   const videoIdRaw = c.req.query('videoId') ?? ''
@@ -314,7 +344,7 @@ app.get('/api/youtube/comments', async (c) => {
   const onlyUnanswered = c.req.query('onlyUnanswered') !== 'false'
 
   try {
-    const res = await fetchVideoComments(c.env.YOUTUBE_API_KEY, videoId, {
+    const res = await fetchVideoComments(ytKey, videoId, {
       maxPages,
       onlySaju,
       onlyUnanswered,
@@ -336,7 +366,8 @@ app.get('/api/youtube/comments', async (c) => {
 //   응답: { ok, videos, stats, channel_title }
 // ─────────────────────────────────────────────────────────────────
 app.get('/api/youtube/channel', async (c) => {
-  if (!c.env.YOUTUBE_API_KEY) {
+  const ytKey = youtubeKey(c)
+  if (!ytKey) {
     return c.json({ ok: false, error: 'YOUTUBE_API_KEY가 설정되지 않았어요.' }, 400)
   }
   const link = c.req.query('link') ?? ''
@@ -344,7 +375,7 @@ app.get('/api/youtube/channel', async (c) => {
   const maxVideos = parseInt(c.req.query('maxVideos') ?? '30', 10)
 
   try {
-    const res = await scanChannelForReplyNeeds(c.env.YOUTUBE_API_KEY, link, maxVideos)
+    const res = await scanChannelForReplyNeeds(ytKey, link, maxVideos)
     return c.json({
       ok: true,
       videos: res.videos,
@@ -361,7 +392,8 @@ app.get('/api/youtube/channel', async (c) => {
 //   응답: { ok, results:[{author,text,draft,mode,year_from_title,skipped,error}], stats, truncated }
 // ─────────────────────────────────────────────────────────────────
 app.post('/api/batch', async (c) => {
-  if (!c.env.ANTHROPIC_API_KEY) {
+  const batchApiKey = anthropicKey(c)
+  if (!batchApiKey) {
     return c.json({ ok: false, error: 'ANTHROPIC_API_KEY가 설정되지 않았어요.' }, 400)
   }
   let body: any
@@ -380,8 +412,8 @@ app.post('/api/batch', async (c) => {
   }
 
   const videoBirthYear = num(body.videoBirthYear)
-  const model = c.env.CLAUDE_MODEL || DEFAULT_MODEL
-  const apiKey = c.env.ANTHROPIC_API_KEY!
+  const model = claudeModel(c)
+  const apiKey = batchApiKey
 
   const results: any[] = new Array(items.length)
   const CONCURRENCY = 4
