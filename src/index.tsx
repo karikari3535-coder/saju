@@ -18,7 +18,7 @@ import { serveStatic } from 'hono/cloudflare-workers'
 import { parseComment } from './parser'
 import { computeSaju, type SajuInput, type Calendar } from './saju'
 import { buildDataBlock } from './prompt'
-import { generateDraft, DEFAULT_MODEL } from './claude'
+import { generateDraft, extractCommentsFromImage, DEFAULT_MODEL } from './claude'
 import { fetchVideoComments, scanChannelForReplyNeeds, extractYoutubeTarget } from './youtube'
 import { SHELL_HTML, loginPageHtml } from './ui'
 
@@ -482,6 +482,40 @@ app.post('/api/batch', async (c) => {
     stats: { generated, skipped, failed },
     truncated,
   })
+})
+
+// ─────────────────────────────────────────────────────────────────
+// /api/ocr-comments — 스크린샷(유튜브 커뮤니티/댓글 캡쳐)에서 댓글 추출
+//   요청: { image: "data:image/png;base64,..." }
+//   응답: { ok, comments:[{author,text}] }
+// ─────────────────────────────────────────────────────────────────
+app.post('/api/ocr-comments', async (c) => {
+  const apiKey = anthropicKey(c)
+  if (!apiKey) {
+    return c.json({ ok: false, error: 'ANTHROPIC_API_KEY가 설정되지 않았어요.' }, 400)
+  }
+  let body: any
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: '잘못된 요청(JSON)이에요.' }, 400)
+  }
+  const image: string = typeof body.image === 'string' ? body.image : ''
+  if (!image) {
+    return c.json({ ok: false, error: '이미지(image)가 없어요.' }, 400)
+  }
+  // 대략적 용량 가드: base64 길이 기준 ~8MB
+  if (image.length > 11_000_000) {
+    return c.json({ ok: false, error: '이미지가 너무 커요(8MB 이하 권장). 화면 일부만 잘라서 올려주세요.' }, 400)
+  }
+
+  const model = claudeModel(c)
+  try {
+    const comments = await extractCommentsFromImage(apiKey, model, image)
+    return c.json({ ok: true, comments })
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message ?? '이미지 분석 실패' }, 500)
+  }
 })
 
 // ─────────────────────────────────────────────────────────────────

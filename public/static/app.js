@@ -36,6 +36,12 @@ const state = {
   channelBatch: { running: false, total: 0, done: 0, current: '', videos: [] },
   // 무시 목록 관리 패널 펼침 여부
   ignorePanelOpen: false,
+  // 수동 입력(댓글 직접 붙여넣기) 박스 펼침 여부 — 기본 접힘
+  manualOpen: false,
+  // 스크린샷에서 댓글 추출 → 검토 → 일괄 생성
+  //   image: 미리보기용 data URL, items: 추출/편집 중인 댓글 [{author,text}]
+  //   extracting: OCR 진행 중, error: 오류 메시지
+  ocr: { image: '', items: null, extracting: false, error: '', batch: { running: false, results: [], stats: null, error: '' } },
 };
 
 function el(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
@@ -367,6 +373,136 @@ function copyOneBatch(idx) {
   if (!r) return;
   navigator.clipboard.writeText(r.draft).then(() => {
     const btn = document.getElementById('batch-copy-' + idx);
+    if (btn) { btn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => render(), 1200); }
+  });
+}
+
+// ============================================================
+// 스크린샷에서 댓글 추출 (Claude Vision) → 검토 → 일괄 생성
+//   유튜브 관리자 커뮤니티/댓글 화면을 캡쳐해 붙여넣으면, 화면 속 여러
+//   댓글을 각각 인식해서 사주 답글을 한꺼번에 지어준다.
+// ============================================================
+
+// 파일/클립보드 이미지(Blob)를 data URL 로 변환
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function handleOcrFile(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type)) { state.ocr.error = '이미지 파일만 올릴 수 있어요.'; render(); return; }
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    state.ocr.image = dataUrl;
+    state.ocr.items = null;
+    state.ocr.error = '';
+    state.ocr.batch = { running: false, results: [], stats: null, error: '' };
+    render();
+    await runOcrExtract();
+  } catch (e) {
+    state.ocr.error = '이미지를 읽지 못했어요.'; render();
+  }
+}
+
+// 붙여넣기(Ctrl+V) 이벤트에서 이미지 추출 (문서 전역 리스너)
+async function handleGlobalPaste(ev) {
+  const items = ev.clipboardData && ev.clipboardData.items;
+  if (!items) return;
+  for (const it of items) {
+    if (it.type && it.type.indexOf('image') === 0) {
+      const file = it.getAsFile();
+      if (file) { ev.preventDefault(); await handleOcrFile(file); return; }
+    }
+  }
+}
+
+// 이미지 → /api/ocr-comments → 추출 댓글 목록
+async function runOcrExtract() {
+  if (!state.ocr.image) return;
+  state.ocr.extracting = true; state.ocr.error = ''; render();
+  try {
+    const { data } = await axios.post('/api/ocr-comments', { image: state.ocr.image });
+    if (data.ok) {
+      state.ocr.items = (data.comments || []).map(c => ({ author: c.author || '', text: c.text || '' }));
+      if (!state.ocr.items.length) state.ocr.error = '이미지에서 읽을 수 있는 댓글을 찾지 못했어요. 더 선명하게(글자가 크게 보이게) 캡쳐해 주세요.';
+    } else {
+      state.ocr.error = data.error || '이미지 분석 실패';
+    }
+  } catch (e) {
+    state.ocr.error = e?.response?.data?.error || e.message;
+  } finally {
+    state.ocr.extracting = false; render();
+  }
+}
+
+function ocrClear() {
+  state.ocr = { image: '', items: null, extracting: false, error: '', batch: { running: false, results: [], stats: null, error: '' } };
+  render();
+}
+
+function ocrAddItem() {
+  if (!state.ocr.items) state.ocr.items = [];
+  state.ocr.items.push({ author: '', text: '' });
+  render();
+}
+
+function ocrRemoveItem(i) {
+  if (!state.ocr.items) return;
+  state.ocr.items.splice(i, 1);
+  render();
+}
+
+// 검토 완료된 댓글들을 일괄 생성 (영상 제목 연도 폴백 없음 — 댓글 자체 정보로만)
+async function ocrGenerate() {
+  const items = (state.ocr.items || []).filter(it => (it.text || '').trim());
+  if (!items.length) { state.ocr.error = '생성할 댓글이 없어요.'; render(); return; }
+  state.ocr.batch = { running: true, results: [], stats: null, error: '' };
+  state.ocr.error = ''; render();
+  try {
+    const { data } = await axios.post('/api/batch', { items });
+    if (data.ok) {
+      state.ocr.batch.results = data.results || [];
+      state.ocr.batch.stats = data.stats || null;
+      state.ocr.batch.truncated = data.truncated || 0;
+    } else {
+      state.ocr.batch.error = data.error || '일괄 생성 실패';
+    }
+  } catch (e) {
+    state.ocr.batch.error = e?.response?.data?.error || e.message;
+  } finally {
+    state.ocr.batch.running = false; render();
+    setTimeout(() => { const elx = document.getElementById('ocr-results'); if (elx) elx.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
+  }
+}
+
+function buildOcrBatchText() {
+  const rows = (state.ocr.batch.results || []).filter(r => r.draft);
+  const sep = '\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+  return rows.map((r, i) => {
+    const head = `【${i + 1}】 @${r.author || ''}  (원댓글: ${(r.text || '').replace(/\s+/g, ' ').slice(0, 60)})`;
+    return `${head}\n\n${r.draft}`;
+  }).join(sep);
+}
+
+function copyOcrBatchAll() {
+  const text = buildOcrBatchText();
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('ocr-copy-all');
+    if (btn) { btn.innerHTML = '<i class="fas fa-check mr-2"></i>전체 복사됨!'; setTimeout(() => render(), 1500); }
+  });
+}
+
+function copyOcrOne(idx) {
+  const r = (state.ocr.batch.results || []).filter(x => x.draft)[idx];
+  if (!r) return;
+  navigator.clipboard.writeText(r.draft).then(() => {
+    const btn = document.getElementById('ocr-copy-' + idx);
     if (btn) { btn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => render(), 1200); }
   });
 }
@@ -906,6 +1042,162 @@ function ignoreListView() {
   </div>`;
 }
 
+// ── 수동 입력(댓글 직접 붙여넣기) — 접이식, 기본 접힘 ──
+//   "이 댓글로 하나만 작성" 등으로 댓글이 채워지면 자동으로 펼친다.
+function manualView() {
+  const open = state.manualOpen || !!state.comment || !!state.pickedAuthor;
+  return `
+  <div class="parchment rounded-xl p-5 space-y-4">
+    <button onclick="window.__toggleManual()" class="w-full flex items-center justify-between">
+      <h3 class="serif text-lg font-bold gold-text"><i class="fas fa-keyboard mr-2"></i>댓글 하나 직접 입력 ${state.pickedAuthor ? `<span class="text-xs font-normal text-stone-500 bg-amber-50 rounded-full px-2 py-0.5 ml-1"><i class="fas fa-user mr-1"></i>${esc(state.pickedAuthor)}</span>` : ''}</h3>
+      <i class="fas fa-chevron-${open ? 'up' : 'down'} text-stone-400"></i>
+    </button>
+    ${open ? `
+    <div class="space-y-4 fade-in">
+      <textarea id="comment" placeholder="예) 1990년 5월 15일 오후 3시에 태어난 여자입니다. 요즘 이직 때문에 너무 막막한데 올해 흐름이 어떨까요?" rows="4"
+        class="w-full border border-stone-200 rounded-lg p-3">${esc(state.comment)}</textarea>
+
+      <div class="grid grid-cols-2 sm:grid-cols-6 gap-2 text-sm">
+        <input id="m-year" value="${state.manual.year}" placeholder="연(양력)" class="border border-stone-200 rounded-lg px-2 py-2" />
+        <input id="m-month" value="${state.manual.month}" placeholder="월" class="border border-stone-200 rounded-lg px-2 py-2" />
+        <input id="m-day" value="${state.manual.day}" placeholder="일" class="border border-stone-200 rounded-lg px-2 py-2" />
+        <select id="m-hour" class="border border-stone-200 rounded-lg px-2 py-2">
+          <option value="">시(자동)</option>
+          <option value="unknown">시간모름</option>
+          ${Array.from({length:24},(_,i)=>`<option value="${i}" ${state.manual.hour==String(i)?'selected':''}>${i}시</option>`).join('')}
+        </select>
+        <select id="m-gender" class="border border-stone-200 rounded-lg px-2 py-2">
+          <option value="">성별</option>
+          <option value="남" ${state.manual.gender==='남'?'selected':''}>남</option>
+          <option value="여" ${state.manual.gender==='여'?'selected':''}>여</option>
+        </select>
+        <select id="m-cal" class="border border-stone-200 rounded-lg px-2 py-2">
+          <option value="solar" ${state.manual.calendar==='solar'?'selected':''}>양력</option>
+          <option value="lunar" ${state.manual.calendar==='lunar'?'selected':''}>음력</option>
+        </select>
+      </div>
+      <p class="text-xs text-stone-400">댓글에서 자동 추출되며, 위 칸으로 직접 보정할 수 있어요. (수동 입력이 우선)</p>
+
+      <button onclick="window.__doAnalyze()" ${state.loadingAnalyze ? 'disabled' : ''}
+        class="w-full bg-stone-800 text-white font-bold py-3 rounded-xl hover:bg-stone-700 transition disabled:opacity-60 flex items-center justify-center gap-2">
+        ${state.loadingAnalyze ? '<span class="spinner"></span> 계산 중…' : '<i class="fas fa-calculator"></i> 만세력 계산하기'}
+      </button>
+    </div>` : `<p class="text-xs text-stone-400 -mt-2">댓글 하나만 직접 붙여넣어 풀고 싶을 때 펼치세요.</p>`}
+  </div>`;
+}
+
+// ── 스크린샷 붙여넣기 입력 영역 (노란 구역 자리) ──
+function ocrInputView() {
+  const o = state.ocr;
+  const hasImg = !!o.image;
+  return `
+  <div class="parchment rounded-xl p-5 space-y-4">
+    <h3 class="serif text-lg font-bold gold-text"><i class="fas fa-image mr-2"></i>스크린샷으로 한 번에 답글 짓기</h3>
+    <p class="text-sm text-stone-500 -mt-1">유튜브 관리자 <b>커뮤니티/댓글 화면을 캡쳐</b>해서 아래에 <b>붙여넣기(Ctrl+V)</b> 하거나 이미지를 올리면, 화면 속 댓글들을 각각 사주로 인식해 답글을 한꺼번에 지어드려요.</p>
+
+    ${!hasImg ? `
+    <label id="ocr-drop" class="block border-2 border-dashed border-stone-300 rounded-xl p-8 text-center cursor-pointer hover:border-amber-400 hover:bg-amber-50/40 transition">
+      <input id="ocr-file" type="file" accept="image/*" class="hidden" />
+      <div class="text-stone-400"><i class="fas fa-paste text-3xl mb-2"></i></div>
+      <div class="text-stone-600 font-semibold">여기에 캡쳐 이미지를 붙여넣기 (Ctrl+V)</div>
+      <div class="text-xs text-stone-400 mt-1">또는 클릭해서 이미지 파일 선택 · PNG/JPG, 8MB 이하 권장</div>
+    </label>` : `
+    <div class="space-y-3">
+      <div class="relative">
+        <img src="${o.image}" class="w-full rounded-lg border border-stone-200 max-h-72 object-contain bg-stone-50" />
+        <button onclick="window.__ocrClear()" class="absolute top-2 right-2 bg-white/90 border border-stone-300 rounded-lg px-2 py-1 text-xs hover:bg-rose-50 hover:text-rose-600"><i class="fas fa-xmark mr-1"></i>지우기</button>
+      </div>
+      ${o.extracting ? `<div class="text-sm text-stone-500"><span class="spinner"></span> 이미지에서 댓글을 읽고 있어요…</div>` : ''}
+      ${(!o.extracting && o.items) ? `<button onclick="window.__ocrRetry()" class="text-xs gold-text font-semibold hover:underline"><i class="fas fa-rotate mr-1"></i>다시 읽기</button>` : ''}
+    </div>`}
+
+    ${o.error ? `<div class="bg-rose-50 text-rose-700 rounded-lg p-3 text-sm"><i class="fas fa-circle-exclamation mr-2"></i>${esc(o.error)}</div>` : ''}
+
+    ${ocrReviewView()}
+  </div>`;
+}
+
+// 추출된 댓글 검토/편집 영역 (일괄 생성 전 확인 단계)
+function ocrReviewView() {
+  const o = state.ocr;
+  if (!o.items || !o.items.length) return '';
+  const valid = o.items.filter(it => (it.text || '').trim()).length;
+  return `
+  <div class="space-y-3 border-t border-stone-200 pt-4">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h4 class="serif font-bold text-stone-700"><i class="fas fa-list-check mr-2 gold-text"></i>읽어낸 댓글 ${o.items.length}건 <span class="text-xs font-normal text-stone-400">— 보내기 전에 확인·수정하세요</span></h4>
+      <button onclick="window.__ocrAdd()" class="text-xs gold-text font-semibold hover:underline"><i class="fas fa-plus mr-1"></i>댓글 추가</button>
+    </div>
+    <div class="space-y-2">
+      ${o.items.map((it, i) => `
+        <div class="bg-white/70 border border-stone-200 rounded-lg p-3 space-y-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-stone-400 whitespace-nowrap">#${i + 1}</span>
+            <input data-ocr-author="${i}" value="${esc(it.author)}" placeholder="작성자" class="flex-1 border border-stone-200 rounded-lg px-2 py-1.5 text-sm" />
+            <button onclick="window.__ocrRemove(${i})" class="text-stone-400 hover:text-rose-500 px-2" title="이 댓글 삭제"><i class="fas fa-trash-can"></i></button>
+          </div>
+          <textarea data-ocr-text="${i}" rows="2" placeholder="댓글 본문 (생년월일·질문 등)" class="w-full border border-stone-200 rounded-lg p-2 text-sm">${esc(it.text)}</textarea>
+        </div>`).join('')}
+    </div>
+    <p class="text-xs text-stone-400"><i class="fas fa-circle-info mr-1"></i>OCR이 글자를 잘못 읽었을 수 있어요. 특히 <b>생년월일·연도</b>가 정확한지 꼭 확인해 주세요. 사주 단서(연/월/일)가 없는 댓글은 자동으로 '되묻기' 답글이 만들어져요.</p>
+    <button onclick="window.__ocrGenerate()" ${o.batch.running ? 'disabled' : ''}
+      class="w-full gold-bg text-white font-bold py-3 rounded-xl hover:opacity-90 transition disabled:opacity-60 flex items-center justify-center gap-2">
+      ${o.batch.running ? '<span class="spinner"></span> 답글 짓는 중…' : `<i class="fas fa-wand-magic-sparkles"></i> ${valid}건 답글 한꺼번에 짓기`}
+    </button>
+  </div>
+  ${ocrResultsView()}`;
+}
+
+// 스크린샷 일괄 생성 결과 뷰
+function ocrResultsView() {
+  const b = state.ocr.batch;
+  if (!b.running && (!b.results || !b.results.length) && !b.error) return '';
+  const rows = (b.results || []);
+  const withDraft = rows.filter(r => r.draft);
+  return `
+  <div id="ocr-results" class="border-t border-stone-200 pt-4 mt-4 space-y-4 fade-in">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h4 class="serif font-bold gold-text"><i class="fas fa-layer-group mr-2"></i>생성 결과</h4>
+      ${b.stats ? `<span class="text-xs text-stone-500">생성 ${b.stats.generated} · 되묻기/건너뜀 ${b.stats.skipped} · 실패 ${b.stats.failed}</span>` : ''}
+    </div>
+    ${b.error ? `<div class="bg-rose-50 text-rose-700 rounded-lg p-3 text-sm"><i class="fas fa-circle-exclamation mr-2"></i>${esc(b.error)}</div>` : ''}
+    ${b.running ? `<div class="text-sm text-stone-500"><span class="spinner"></span> 답글을 짓고 있어요. 댓글 수에 따라 30초~1분 걸릴 수 있어요.</div>` : ''}
+    ${(!b.running && withDraft.length) ? `
+      <button id="ocr-copy-all" onclick="window.__copyOcrAll()" class="w-full bg-stone-800 text-white font-bold py-3 rounded-xl hover:bg-stone-700 transition">
+        <i class="fas fa-copy mr-2"></i>${withDraft.length}개 답글 전체 복사 (댓글 구분선 포함)
+      </button>` : ''}
+    <div class="space-y-3">
+      ${rows.map((r) => {
+        const idxDraft = withDraft.indexOf(r);
+        if (r.skipped) {
+          return `<div class="bg-stone-50 border border-stone-200 rounded-lg p-3 text-sm opacity-70">
+            <div class="text-xs text-stone-400 mb-1">@${esc(r.author||'')} · <span class="text-stone-400">건너뜀(사주 정보 없음)</span></div>
+            <div class="text-stone-600">${esc((r.text||'').slice(0,100))}</div>
+          </div>`;
+        }
+        if (r.error) {
+          return `<div class="bg-rose-50 border border-rose-200 rounded-lg p-3 text-sm">
+            <div class="text-xs text-rose-500 mb-1">@${esc(r.author||'')} · 생성 실패</div>
+            <div class="text-stone-600">${esc((r.text||'').slice(0,100))}</div>
+            <div class="text-xs text-rose-500 mt-1">${esc(r.error)}</div>
+          </div>`;
+        }
+        const modeBadge = r.mode === 'guide'
+          ? '<span class="badge bg-amber-100 text-amber-700">되묻기</span>'
+          : '<span class="badge bg-green-100 text-green-700">풀이</span>';
+        return `<div class="bg-white/70 border border-stone-200 rounded-lg p-3 text-sm space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-xs text-stone-500"><i class="fas fa-user mr-1"></i>${esc(r.author||'')} ${modeBadge} <span class="text-stone-400">${r.draft.length}자</span></div>
+            <button id="ocr-copy-${idxDraft}" onclick="window.__copyOcrOne(${idxDraft})" class="text-xs bg-stone-100 hover:bg-stone-200 rounded-lg px-2 py-1" title="이 답글만 복사"><i class="fas fa-copy"></i></button>
+          </div>
+          <div class="text-xs text-stone-400 bg-stone-50 rounded p-2">원댓글: ${esc((r.text||'').replace(/\s+/g,' ').slice(0,120))}</div>
+          <textarea class="w-full border border-stone-200 rounded-lg p-3 draft-area bg-white/70 text-sm" rows="8">${esc(r.draft)}</textarea>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
 // 일괄 생성 결과 뷰
 function batchView() {
   const b = state.batch;
@@ -973,37 +1265,9 @@ function render() {
     ${state.error ? `<div class="mb-4 bg-rose-50 text-rose-700 rounded-lg p-3 text-sm fade-in"><i class="fas fa-circle-exclamation mr-2"></i>${esc(state.error)}</div>` : ''}
 
     <div class="space-y-5">
-      <div class="parchment rounded-xl p-5 space-y-4">
-        <h3 class="serif text-lg font-bold gold-text"><i class="fas fa-comment-dots mr-2"></i>시청자 댓글 / 사연 ${state.pickedAuthor ? `<span class="text-xs font-normal text-stone-500 bg-amber-50 rounded-full px-2 py-0.5 ml-1"><i class="fas fa-user mr-1"></i>${esc(state.pickedAuthor)}</span>` : ''}</h3>
-        <textarea id="comment" placeholder="예) 1990년 5월 15일 오후 3시에 태어난 여자입니다. 요즘 이직 때문에 너무 막막한데 올해 흐름이 어떨까요?" rows="4"
-          class="w-full border border-stone-200 rounded-lg p-3">${esc(state.comment)}</textarea>
+      ${ocrInputView()}
 
-        <div class="grid grid-cols-2 sm:grid-cols-6 gap-2 text-sm">
-          <input id="m-year" value="${state.manual.year}" placeholder="연(양력)" class="border border-stone-200 rounded-lg px-2 py-2" />
-          <input id="m-month" value="${state.manual.month}" placeholder="월" class="border border-stone-200 rounded-lg px-2 py-2" />
-          <input id="m-day" value="${state.manual.day}" placeholder="일" class="border border-stone-200 rounded-lg px-2 py-2" />
-          <select id="m-hour" class="border border-stone-200 rounded-lg px-2 py-2">
-            <option value="">시(자동)</option>
-            <option value="unknown">시간모름</option>
-            ${Array.from({length:24},(_,i)=>`<option value="${i}" ${state.manual.hour==String(i)?'selected':''}>${i}시</option>`).join('')}
-          </select>
-          <select id="m-gender" class="border border-stone-200 rounded-lg px-2 py-2">
-            <option value="">성별</option>
-            <option value="남" ${state.manual.gender==='남'?'selected':''}>남</option>
-            <option value="여" ${state.manual.gender==='여'?'selected':''}>여</option>
-          </select>
-          <select id="m-cal" class="border border-stone-200 rounded-lg px-2 py-2">
-            <option value="solar" ${state.manual.calendar==='solar'?'selected':''}>양력</option>
-            <option value="lunar" ${state.manual.calendar==='lunar'?'selected':''}>음력</option>
-          </select>
-        </div>
-        <p class="text-xs text-stone-400">댓글에서 자동 추출되며, 위 칸으로 직접 보정할 수 있어요. (수동 입력이 우선)</p>
-
-        <button onclick="window.__doAnalyze()" ${state.loadingAnalyze ? 'disabled' : ''}
-          class="w-full bg-stone-800 text-white font-bold py-3 rounded-xl hover:bg-stone-700 transition disabled:opacity-60 flex items-center justify-center gap-2">
-          ${state.loadingAnalyze ? '<span class="spinner"></span> 계산 중…' : '<i class="fas fa-calculator"></i> 만세력 계산하기'}
-        </button>
-      </div>
+      ${manualView()}
 
       ${inputView()}
       ${channelView()}
@@ -1038,6 +1302,17 @@ function render() {
   if (ytDet) ytDet.addEventListener('toggle', e => { state.youtube.open = e.target.open; });
   const de = document.getElementById('draft-edit');
   if (de) de.addEventListener('input', e => state.draft = e.target.value);
+
+  // 스크린샷 OCR: 파일 선택
+  const ocrFile = document.getElementById('ocr-file');
+  if (ocrFile) ocrFile.addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) handleOcrFile(f); });
+  // 추출된 댓글 편집칸 바인딩 (작성자/본문) — render 무방하게 state만 갱신
+  document.querySelectorAll('[data-ocr-author]').forEach(elx => {
+    elx.addEventListener('input', e => { const i = +elx.getAttribute('data-ocr-author'); if (state.ocr.items && state.ocr.items[i]) state.ocr.items[i].author = e.target.value; });
+  });
+  document.querySelectorAll('[data-ocr-text]').forEach(elx => {
+    elx.addEventListener('input', e => { const i = +elx.getAttribute('data-ocr-text'); if (state.ocr.items && state.ocr.items[i]) state.ocr.items[i].text = e.target.value; });
+  });
 }
 
 function bind(id, fn) { const e = document.getElementById(id); if (e) e.addEventListener('input', ev => fn(ev.target.value)); }
@@ -1091,6 +1366,22 @@ window.__clearIgnore = () => {
 };
 // 무시 목록 패널 펼침/접힘 토글
 window.__toggleIgnorePanel = () => { state.ignorePanelOpen = !state.ignorePanelOpen; render(); };
+
+// 수동 입력 박스 펼침/접힘 토글
+window.__toggleManual = () => { state.manualOpen = !state.manualOpen; render(); };
+
+// 스크린샷 OCR 핸들러
+window.__ocrClear = ocrClear;
+window.__ocrRetry = runOcrExtract;
+window.__ocrAdd = ocrAddItem;
+window.__ocrRemove = ocrRemoveItem;
+window.__ocrGenerate = ocrGenerate;
+window.__copyOcrAll = copyOcrBatchAll;
+window.__copyOcrOne = copyOcrOne;
+
+// 어디서든 캡쳐 이미지를 Ctrl+V 로 붙여넣으면 OCR 입력으로 받는다
+//   (단, 텍스트 입력칸에 포커스가 있을 때는 그쪽 붙여넣기를 방해하지 않도록 이미지일 때만 가로챈다)
+document.addEventListener('paste', handleGlobalPaste);
 
 loadStatus();
 render();
