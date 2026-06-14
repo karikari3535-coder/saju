@@ -89,8 +89,11 @@ curl http://localhost:3000        # 로그인 활성화 시 401(로그인 화면
 ```
 
 ## 배포
-- **플랫폼**: Cloudflare Pages
-- **상태**: 로컬 검증 완료 (✅ 빌드/인증/analyze 전 모드/SPA 렌더 확인)
+- **플랫폼**: Cloudflare Workers (Genspark 호스팅)
+- **운영 URL**: https://5d4f2df2-0e67-4bfa-8d04-04c9e806ebe3.vip.gensparksite.com (🔒 로그인 필요)
+- **상태**: ✅ 배포 완료 — 비밀번호 보호 활성, 인증/analyze 전 모드 production 검증 완료
+- **환경변수 주입**: 비밀번호 등 `vars`는 `wrangler.jsonc`(git 미추적)로 주입.
+  공개용 예시는 `wrangler.example.jsonc` 참고. (`ANTHROPIC_API_KEY`/`YOUTUBE_API_KEY`도 같은 방식으로 추가)
 - **기술 스택**: Hono + TypeScript + Vite + manseryeok + TailwindCSS(CDN)
 - **최종 수정**: 2026-06-14 (개발 로그 대조 보완: ① `APP_PASSWORD`/`SITE_PASSWORD` 양쪽 지원, ② "○○년생" 연도만 댓글 추출→guide 되묻기, ③ 시스템 프롬프트에 현재 연도·세운(올해 2026 병오년) 컨텍스트 동적 주입)
 

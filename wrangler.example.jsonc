@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "webapp",
+  "compatibility_date": "2025-05-01",
+  "pages_build_output_dir": "./dist",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  // 실제 배포 시 wrangler.jsonc 로 복사 후 값 채우기.
+  // 운영자 비밀번호는 SITE_PASSWORD 또는 APP_PASSWORD 로 인식.
+  "vars": {
+    "CLAUDE_MODEL": "claude-sonnet-4-6",
+    "SITE_PASSWORD": "여기에-운영자-비밀번호"
+  }
+}
