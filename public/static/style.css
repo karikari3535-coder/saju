@@ -1,1 +1,153 @@
-h1 { font-family: Arial, Helvetica, sans-serif; }
+/* 천기누설 만신보감 · 사주 답글 작성실 — 동양적 다크 테마 */
+:root {
+  --ink: #1a1410;
+  --ink-2: #221a13;
+  --gold: #d4af37;
+  --gold-soft: #e6c869;
+  --jade: #6fae8e;
+}
+
+body {
+  font-family: 'Noto Sans KR', system-ui, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(212, 175, 55, 0.10), transparent 60%),
+    radial-gradient(900px 500px at -10% 10%, rgba(111, 174, 142, 0.08), transparent 55%),
+    linear-gradient(160deg, #14100c 0%, #1c1510 55%, #100c08 100%);
+  background-attachment: fixed;
+}
+
+.font-serif { font-family: 'Noto Serif KR', serif; }
+
+.sangsil-header {
+  background: linear-gradient(180deg, rgba(40, 30, 18, 0.9), rgba(26, 20, 14, 0.7));
+  border-bottom: 1px solid rgba(212, 175, 55, 0.25);
+  backdrop-filter: blur(6px);
+}
+
+.panel {
+  background: linear-gradient(180deg, rgba(38, 30, 22, 0.85), rgba(28, 22, 16, 0.85));
+  border: 1px solid rgba(212, 175, 55, 0.18);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.panel-title {
+  font-family: 'Noto Serif KR', serif;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--gold-soft);
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.field, .field-sm {
+  width: 100%;
+  background: rgba(15, 12, 8, 0.7);
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  color: #f1e9da;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.field-sm { padding: 0.4rem 0.55rem; font-size: 0.9rem; }
+.field:focus, .field-sm:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.15);
+}
+.field::placeholder, .field-sm::placeholder { color: #9c8c72; }
+
+.lbl { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem; color: #c9b994; }
+
+.btn-gold {
+  background: linear-gradient(180deg, var(--gold-soft), var(--gold));
+  color: #2a1d08;
+  font-weight: 700;
+  padding: 0.55rem 1rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  transition: transform 0.08s, filter 0.15s;
+}
+.btn-gold:hover { filter: brightness(1.07); }
+.btn-gold:active { transform: translateY(1px); }
+.btn-gold:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-ghost {
+  background: rgba(212, 175, 55, 0.08);
+  color: var(--gold-soft);
+  font-weight: 600;
+  padding: 0.55rem 1rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  transition: background 0.15s;
+}
+.btn-ghost:hover { background: rgba(212, 175, 55, 0.16); }
+.btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.tab-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  color: #c9b994;
+  background: rgba(0, 0, 0, 0.2);
+  font-weight: 600;
+}
+.tab-btn.active {
+  background: linear-gradient(180deg, var(--gold-soft), var(--gold));
+  color: #2a1d08;
+  border-color: transparent;
+}
+
+.hint { font-size: 0.75rem; color: #a99a7e; }
+
+/* 사주 팔자 격자 */
+.pillar-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
+.pillar-card {
+  text-align: center;
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.3rem;
+  background: rgba(15, 12, 8, 0.55);
+}
+.pillar-card .label { font-size: 0.7rem; color: #a99a7e; }
+.pillar-card .gan { font-family: 'Noto Serif KR', serif; font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+.pillar-card .ji { font-family: 'Noto Serif KR', serif; font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+.pillar-card .tg { font-size: 0.65rem; color: #c9b994; margin-top: 0.15rem; }
+
+/* 오행 색 */
+.el-목 { color: #7fc69a; } .el-화 { color: #e8836b; } .el-토 { color: #d6b35a; }
+.el-금 { color: #d8d8d8; } .el-수 { color: #6fa8d4; }
+
+.bar-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem 0; }
+.bar-row .name { width: 1.4rem; font-weight: 700; }
+.bar-track { flex: 1; height: 0.6rem; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 999px; }
+
+.note { font-size: 0.78rem; padding: 0.5rem 0.7rem; border-radius: 0.5rem; margin-top: 0.4rem; }
+.note-info { background: rgba(111, 168, 212, 0.12); border: 1px solid rgba(111,168,212,0.3); color: #bcd8ef; }
+.note-warn { background: rgba(232, 131, 107, 0.14); border: 1px solid rgba(232,131,107,0.35); color: #f3c4b6; }
+
+.chip { display: inline-block; font-size: 0.7rem; padding: 0.15rem 0.55rem; border-radius: 999px; background: rgba(111,174,142,0.15); border: 1px solid rgba(111,174,142,0.35); color: #b6e0cb; margin: 0.1rem; }
+
+.video-row, .comment-row {
+  display: flex; gap: 0.75rem; align-items: center;
+  border: 1px solid rgba(212,175,55,0.16);
+  border-radius: 0.6rem; padding: 0.6rem; background: rgba(15,12,8,0.5);
+}
+.video-row img { width: 92px; height: 52px; object-fit: cover; border-radius: 0.4rem; }
+
+.batch-card { border: 1px solid rgba(212,175,55,0.18); border-radius: 0.6rem; padding: 0.8rem; background: rgba(15,12,8,0.5); }
+.batch-card .draft-text { white-space: pre-wrap; font-family: 'Noto Serif KR', serif; line-height: 1.7; font-size: 0.92rem; color: #efe6d6; }
+
+.toast {
+  position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+  background: rgba(20,16,12,0.95); border: 1px solid var(--gold);
+  color: var(--gold-soft); padding: 0.7rem 1.2rem; border-radius: 999px;
+  font-size: 0.85rem; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+
+.spinner { display: inline-block; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

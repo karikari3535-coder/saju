@@ -15,10 +15,15 @@ dist/
 node_modules/
 .wrangler
 
-# env
+# env / secrets (절대 커밋 금지 — API 키 등 비밀값)
 .env
-.env.production
+.env.*
 .dev.vars
+.dev.vars.*
+!.dev.vars.example
+*.key
+*.pem
+secrets/
 
 # logs
 logs/

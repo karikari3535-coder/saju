@@ -1,0 +1,206 @@
+/**
+ * prompt.ts — AI 답글 초안용 프롬프트 빌더 (v3.8)
+ *
+ * 구성:
+ *   1) 시스템 프롬프트 — "천기누설 만신보감" 페르소나 + 작성 규칙
+ *   2) 코드→AI 다리(JSON 데이터블록) — 계산된 사주를 구조화해 전달
+ *   3) 유저 메시지 — 위 데이터블록 + 작성 지시
+ *
+ * 철학: 계산은 코드가(이 데이터블록), 글쓰기는 AI가.
+ *       AI는 사주 글자를 다시 계산하지 말고 주어진 데이터만 해석한다.
+ */
+
+import type { ParsedComment } from './parser'
+import type { SajuResult } from './saju'
+
+export const PROMPT_VERSION = 'v3.8'
+
+/** 답글 회전 상태(패턴 반복 회피용). 현재 무상태라 호출자가 주입. */
+export interface RotationState {
+  /** 최근 사용한 도입 톤(예: ['따뜻한 공감', '비유로 시작']) */
+  recentOpenings?: string[]
+  /** 최근 마무리 멘트 */
+  recentClosings?: string[]
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 1) 시스템 프롬프트
+// ─────────────────────────────────────────────────────────────────
+export const SYSTEM_PROMPT = `당신은 유튜브 채널 "천기누설 만신보감"의 사주 상담 답글을 쓰는 글쓰기 보조자입니다.
+운영자(혜인)가 최종 검토·수정 후 직접 게시하므로, 당신은 "초안"을 작성합니다.
+
+[정체성·말투]
+- 따뜻하고 단단한, 경험 많은 명리 상담가의 어조. 존댓말.
+- 점쟁이의 단정·협박("~하면 큰일난다")이 아니라, 흐름을 읽고 방향을 제시하는 조언.
+- 시청자를 "선생님" 또는 적절한 호칭으로 부르되 과하지 않게.
+- 이모지는 절제(0~2개). 신비주의 과장 금지.
+
+[절대 규칙]
+1. 사주 글자(연·월·일·시주, 오행, 십성, 대운)는 **주어진 데이터블록의 값만** 사용한다.
+   당신이 직접 만세력을 다시 계산하지 마라. 글자를 바꾸거나 새로 지어내지 마라.
+2. 데이터에 없는 사실(직업·구체적 사건·이름 등)을 단정하지 마라. "~하신 편" 같은 경향으로 표현.
+3. mode가 'three_pillar'면 시주가 없다는 점을 자연스럽게 인정하고, 시주 해석은 하지 않는다.
+4. mode가 'estimate'면 시주는 "추정"임을 가볍게 덧붙인다.
+5. mode가 'guide'면 사주 해석을 하지 말고, 생년월일시를 어떻게 알려주면 되는지 친절히 안내만 한다.
+6. 건강·의료·법률·투자에 대한 확정적 단언 금지(일반적 조언 수준).
+7. 위기 신호(flags.crisis=true)가 있으면, 공감 후 자연스럽게 "자살예방 상담전화 109"를 안내한다(설교조 금지).
+8. 운세는 '결정된 운명'이 아니라 '경향과 시기'로 말한다. 노력으로 바뀔 여지를 남긴다.
+
+[구성·분량]
+- 약 1,300~1,700자(한글 기준, 공백 포함). 너무 짧지 않게.
+- 흐름: ① 공감/인사 → ② 사주 핵심 1~2가지(일간·오행 중심) → ③ 질문/관심사에 대한 풀이 →
+  ④ 시기·대운 힌트 → ⑤ 따뜻한 마무리 + (필요시 위기안내).
+- 전문용어는 쓰되 바로 쉬운 말로 풀어준다(예: "정관(正官) — 책임감과 질서를 상징해요").
+- 같은 도입/마무리 패턴을 반복하지 마라(주어진 rotation_state를 피해 변주).
+
+[출력 형식]
+- 유튜브 댓글에 그대로 붙여넣을 수 있는 **순수 텍스트 답글만** 출력한다.
+- 머리말("다음은 답글입니다") · 코드블록 · 마크다운 제목 금지.`
+
+// ─────────────────────────────────────────────────────────────────
+// 2) 데이터블록 (코드 → AI 다리)
+// ─────────────────────────────────────────────────────────────────
+export interface DataBlock {
+  prompt_version: string
+  viewer_comment: string
+  flags: {
+    mode: SajuResult['mode']
+    time_known: boolean
+    calendar: 'solar' | 'lunar'
+    crisis: boolean
+    ambiguity: string[]
+  }
+  parsed: {
+    age_band: string | null
+    gender: string | null
+    question: string | null
+    emotion_keywords: string[]
+  }
+  saju: {
+    eight_char: string
+    day_master: string
+    day_master_element: string
+    element_count: SajuResult['elementCount']
+    void_branches: string[]
+    pillars: {
+      year: PillarBlock | null
+      month: PillarBlock | null
+      day: PillarBlock | null
+      hour: PillarBlock | null
+    }
+    luck: SajuResult['luck']
+  } | null
+  rotation_state: RotationState
+}
+
+interface PillarBlock {
+  korean: string
+  stem: string
+  branch: string
+  stem_element: string
+  branch_element: string
+  ten_god_stem: string
+  ten_god_branch: string
+}
+
+export function buildDataBlock(
+  comment: string,
+  parsed: ParsedComment,
+  saju: SajuResult,
+  rotation: RotationState = {},
+): DataBlock {
+  const crisis = saju.notes.some((n) => n.includes('위기')) ||
+    parsed.ambiguity.some((a) => a.includes('위기'))
+
+  const sajuBlock =
+    saju.mode === 'guide'
+      ? null
+      : {
+          eight_char: saju.eightChar,
+          day_master: saju.dayMaster,
+          day_master_element: saju.dayMasterElement,
+          element_count: saju.elementCount,
+          void_branches: saju.voidBranches,
+          pillars: {
+            year: toPillarBlock(saju.pillars.year),
+            month: toPillarBlock(saju.pillars.month),
+            day: toPillarBlock(saju.pillars.day),
+            hour: toPillarBlock(saju.pillars.hour),
+          },
+          luck: saju.luck,
+        }
+
+  return {
+    prompt_version: PROMPT_VERSION,
+    viewer_comment: comment,
+    flags: {
+      mode: saju.mode,
+      time_known: parsed.hour !== null,
+      calendar: saju.input.calendar ?? 'solar',
+      crisis,
+      ambiguity: [...parsed.ambiguity, ...saju.notes],
+    },
+    parsed: {
+      age_band: parsed.ageBand,
+      gender: parsed.gender,
+      question: parsed.question,
+      emotion_keywords: parsed.emotionKeywords,
+    },
+    saju: sajuBlock,
+    rotation_state: rotation,
+  }
+}
+
+function toPillarBlock(p: SajuResult['pillars']['year'] | null): PillarBlock | null {
+  if (!p) return null
+  return {
+    korean: p.korean,
+    stem: p.stem,
+    branch: p.branch,
+    stem_element: p.stemElement,
+    branch_element: p.branchElement,
+    ten_god_stem: p.stemTenGod,
+    ten_god_branch: p.branchTenGod,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 3) 유저 메시지
+// ─────────────────────────────────────────────────────────────────
+export function buildUserMessage(block: DataBlock): string {
+  const guide =
+    block.flags.mode === 'guide'
+      ? `\n[작성 지시] 이 시청자는 생년월일시가 모호합니다. 사주 풀이를 하지 말고, ` +
+        `어떤 정보(양/음력, 연·월·일, 가능하면 태어난 시각, 성별)를 어떻게 알려주면 정확히 봐드릴 수 있는지 ` +
+        `친절하고 짧게(약 400~600자) 안내해 주세요.`
+      : `\n[작성 지시] 위 데이터블록의 사주 값만 사용해, 시청자의 질문·관심사(parsed.question / emotion_keywords)에 ` +
+        `초점을 맞춘 답글 초안을 약 1,300~1,700자로 작성하세요. ` +
+        `rotation_state의 최근 패턴은 피해서 도입과 마무리를 변주하세요.` +
+        (block.flags.crisis
+          ? ` 위기 신호가 있으니 공감 후 자연스럽게 자살예방 상담전화 109를 안내하세요.`
+          : ``)
+
+  return (
+    `아래는 코드가 계산한 시청자 사주 데이터입니다(JSON). 이 값만 신뢰하고 해석하세요.\n\n` +
+    '```json\n' +
+    JSON.stringify(block, null, 2) +
+    '\n```' +
+    guide
+  )
+}
+
+/** Claude messages API용 payload 조립 (모델·max_tokens 포함) */
+export function buildClaudePayload(block: DataBlock, model: string) {
+  return {
+    model,
+    max_tokens: 2048,
+    temperature: 0.8,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: 'user' as const,
+        content: buildUserMessage(block),
+      },
+    ],
+  }
+}

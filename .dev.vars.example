@@ -1,0 +1,20 @@
+# ===========================================================
+# 환경변수 예시 파일 (.dev.vars.example)
+# ===========================================================
+# 사용법:
+#   1) 이 파일을 복사해서 ".dev.vars" 라는 이름으로 만드세요
+#        cp .dev.vars.example .dev.vars
+#   2) 아래 값들을 본인의 실제 키로 채우세요
+#   3) .dev.vars 는 .gitignore에 등록되어 깃허브에 올라가지 않습니다 (안전)
+#
+# ⚠️ 이 example 파일에는 절대 진짜 키를 적지 마세요. (공개됨)
+# ===========================================================
+
+# Anthropic Claude API 키 (https://console.anthropic.com)
+ANTHROPIC_API_KEY=sk-ant-여기에_본인_키
+
+# 사용할 Claude 모델 (기본: Opus)
+CLAUDE_MODEL=claude-sonnet-4-6
+
+# YouTube Data API v3 키 (선택 - 댓글 자동 수집용)
+YOUTUBE_API_KEY=여기에_YouTube_API_키
