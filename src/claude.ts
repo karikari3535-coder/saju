@@ -71,13 +71,17 @@ const OCR_SYSTEM = [
   '각 댓글에서 다음 3가지를 추출한다:',
   '1) author: 작성자 이름',
   '2) text: 댓글 본문 (작성자 옆 "· N개월 전" 시간 표시, "답글", 좋아요 수, 하트, 메뉴(⋮) 같은 UI 요소는 제외)',
-  '3) video_year: 그 댓글 "오른쪽"에 붙어 있는 영상 썸네일/제목 영역에 "○○○○년생"(예: "1969년생", "1969 년생") 형태로 적힌 출생연도가 보이면 그 4자리 숫자(예: 1969). 보이지 않거나 출생연도가 아니면 null.',
-  '- video_year는 반드시 "○○○○년생" 형태의 출생연도일 때만 채운다. 영상 업로드 연도·조회수·기타 숫자를 출생연도로 착각하지 마라.',
+  '3) video_year: 그 댓글 "오른쪽"에 붙어 있는 영상 썸네일/제목 영역에 출생연도가 보이면 그 숫자.',
+  '   - "○○○○년생"(4자리, 예: "1969년생") 형태면 그 4자리(예: 1969).',
+  '   - "○○년생"(2자리, 예: "79년생", "64년생", "77년생") 형태면 그 2자리 숫자 그대로(예: 79, 64, 77). 1900/2000을 붙이지 말고 본 그대로의 2자리만 넣어라.',
+  '   - "79년생 양띠", "2026년 운세 64년생 닭띠"처럼 띠·운세 문구와 함께 있어도 "○○년생/○○○○년생" 부분의 연도만 뽑는다.',
+  '   - 보이지 않거나 출생연도가 아니면 null.',
+  '- video_year는 반드시 "년생"이 붙은 출생연도일 때만 채운다. 영상 업로드 연도(예: "2024년 운세"의 2024)·조회수·기타 숫자를 출생연도로 착각하지 마라. "2026년 6월"처럼 "년생"이 아닌 연도는 무시한다.',
   '- 각 댓글과 같은 가로줄(행)에 있는 영상 정보만 그 댓글의 video_year로 연결한다. 다른 줄의 영상과 섞지 마라.',
   '- 줄바꿈이 있는 댓글은 자연스럽게 한 덩어리로 합친다.',
   '- 글자가 잘렸거나 흐려서 확신이 없으면, 보이는 만큼만 최대한 정확히 옮긴다(추측해서 지어내지 마라).',
   '반드시 아래 JSON 형식만 출력한다. 설명·머리말·코드블록 표시 없이 JSON 객체 하나만:',
-  '{"comments":[{"author":"작성자","text":"댓글 본문","video_year":1969}, ...]}',
+  '{"comments":[{"author":"작성자A","text":"댓글 본문","video_year":1969},{"author":"작성자B","text":"댓글 본문","video_year":79}, ...]}',
   '읽을 수 있는 시청자 댓글이 하나도 없으면 {"comments":[]} 를 출력한다.',
 ].join('\n')
 
@@ -159,11 +163,15 @@ export async function extractCommentsFromImage(
   const list: any[] = Array.isArray(parsed?.comments) ? parsed.comments : []
   return list
     .map((it) => {
-      // video_year: 4자리 출생연도만 채택 (1900~현재연도+1 범위 가드)
+      // video_year: 4자리(1969) 또는 2자리(79→1979) 출생연도 채택
       let vy: number | null = null
       const rawVy = it?.video_year
-      const n = typeof rawVy === 'number' ? rawVy : parseInt(String(rawVy ?? ''), 10)
+      let n = typeof rawVy === 'number' ? rawVy : parseInt(String(rawVy ?? ''), 10)
       const nowY = new Date().getFullYear()
+      // 2자리로 들어오면 세기 보정: 25 이하 → 20XX, 초과 → 19XX
+      if (Number.isFinite(n) && n >= 0 && n <= 99) {
+        n = n <= 25 ? 2000 + n : 1900 + n
+      }
       if (Number.isFinite(n) && n >= 1900 && n <= nowY + 1) vy = n
       return {
         author: String(it?.author ?? '').trim(),
