@@ -315,8 +315,12 @@ export async function scanChannelForReplyNeeds(
     }
   }
 
-  // 미답변 많은 순
-  videos.sort((a, b) => b.unanswered_count - a.unanswered_count)
+  // 최근 영상 먼저 (발행일 내림차순). 발행일이 없으면 맨 뒤로.
+  videos.sort((a, b) => {
+    const ta = a.published_at ? new Date(a.published_at).getTime() : 0
+    const tb = b.published_at ? new Date(b.published_at).getTime() : 0
+    return tb - ta
+  })
 
   return {
     channelId,
