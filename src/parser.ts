@@ -210,6 +210,20 @@ function extractDate(
     return normalizeDate(year, +m[2], +m[3], ambiguity)
   }
 
+  // 패턴 A3: 혼합형 — "69년.4.17" / "1990년.5.15" (연도는 'X년', 월·일은 점·하이픈·슬래시)
+  //   "69년.4.17(음력)" 처럼 연도 뒤에 점으로 월·일을 구분한 경우.
+  //   4자리 연도 우선.
+  m = text.match(/(?<!\d)(\d{4})\s*년\s*[.\-\/]\s*(\d{1,2})\s*[.\-\/]\s*(\d{1,2})/)
+  if (m) return normalizeDate(+m[1], +m[2], +m[3], ambiguity)
+  // 2자리 연도 + 'X년' + 점 구분 월·일
+  m = text.match(/(?<!\d)(\d{2})\s*년\s*[.\-\/]\s*(\d{1,2})\s*[.\-\/]\s*(\d{1,2})/)
+  if (m) {
+    const yy = +m[1]
+    const year = yy <= 25 ? 2000 + yy : 1900 + yy
+    ambiguity.push(`연도를 2자리(${m[1]})로 적어 ${year}년으로 추정했어요. 확인해 주세요.`)
+    return normalizeDate(year, +m[2], +m[3], ambiguity)
+  }
+
   // 패턴 B: 1990.05.15 / 1990-5-15 / 1990/05/15
   m = text.match(/(\d{4})\s*[.\-\/]\s*(\d{1,2})\s*[.\-\/]\s*(\d{1,2})/)
   if (m) return normalizeDate(+m[1], +m[2], +m[3], ambiguity)
