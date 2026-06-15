@@ -1152,7 +1152,7 @@ function ocrReviewView() {
           <textarea data-ocr-text="${i}" rows="2" placeholder="댓글 본문 (생년월일·질문 등)" class="w-full border border-stone-200 rounded-lg p-2 text-sm">${esc(it.text)}</textarea>
           <div class="flex items-center gap-2 text-xs">
             <label class="text-stone-500 whitespace-nowrap"><i class="fas fa-clapperboard mr-1 text-amber-500"></i>영상 출생연도</label>
-            <input data-ocr-vyear="${i}" value="${esc(it.videoYear || '')}" placeholder="예: 1969" maxlength="4" inputmode="numeric" class="w-24 border border-stone-200 rounded-lg px-2 py-1.5" />
+            <input data-ocr-vyear="${i}" value="${esc(it.videoYear || '')}" placeholder="연도 (선택)" maxlength="4" inputmode="numeric" class="w-28 border border-stone-200 rounded-lg px-2 py-1.5" />
             ${it.videoYear ? `<span class="badge bg-amber-100 text-amber-700">OCR 인식</span>` : `<span class="text-stone-400">댓글에 연도 없으면 이 연도로 풀어요</span>`}
           </div>
         </div>`).join('')}
