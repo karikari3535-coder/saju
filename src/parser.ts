@@ -194,11 +194,15 @@ function extractDate(
   ambiguity: string[],
 ): { year: number | null; month: number | null; day: number | null } {
   // 패턴 A: 1990년 5월 15일 (4자리 연도)
-  let m = text.match(/(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일?/)
+  //   "년"과 "월" 사이에 음력/양력 등 다른 글자가 끼어 있어도 잡도록
+  //   사이에 '월'이 아닌 글자(공백·한글 등)를 0~6자 허용한다.
+  //   예: "1971년 음력 10월 8일"
+  let m = text.match(/(\d{4})\s*년\s*[^\d월]{0,6}?(\d{1,2})\s*월\s*(\d{1,2})\s*일?/)
   if (m) return normalizeDate(+m[1], +m[2], +m[3], ambiguity)
 
   // 패턴 A2: 85년 3월 2일 (2자리 연도 + 한글)
-  m = text.match(/(?<!\d)(\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일?/)
+  //   마찬가지로 "년"과 "월" 사이 음력/양력 등 허용. 예: "71년 음력11월 6일"
+  m = text.match(/(?<!\d)(\d{2})\s*년\s*[^\d월]{0,6}?(\d{1,2})\s*월\s*(\d{1,2})\s*일?/)
   if (m) {
     const yy = +m[1]
     const year = yy <= 25 ? 2000 + yy : 1900 + yy
@@ -267,6 +271,45 @@ function extractDate(
     const year = yy <= 25 ? 2000 + yy : 1900 + yy
     ambiguity.push(`연도를 2자리(${m[1]})로 적어 ${year}년으로 추정했어요. 확인해 주세요.`)
     return { year, month: null, day: null }
+  }
+
+  // 폴백: 위 결합 패턴이 모두 실패했지만 텍스트 어딘가에 "○○○○년"/"○○년"이
+  //   있으면 연도만 따로 잡고, 월·일은 독립 패턴으로 채운다.
+  //   "71년  음력  10월 08일" 처럼 사이 간격이 넓거나 글자가 많이 끼어든 경우 대비.
+  {
+    let year: number | null = null
+    const y4 = text.match(/(?<!\d)(19\d{2}|20\d{2})\s*년/)
+    if (y4) {
+      year = +y4[1]
+    } else {
+      const y2 = text.match(/(?<!\d)(\d{2})\s*년(?!\s*(?:전|후|째|간|동안))/)
+      if (y2) {
+        const yy = +y2[1]
+        year = yy <= 25 ? 2000 + yy : 1900 + yy
+        ambiguity.push(`연도를 2자리(${y2[1]})로 적어 ${year}년으로 추정했어요. 확인해 주세요.`)
+      }
+    }
+    if (year != null) {
+      // 월·일 독립 추출 ("음력10월08일" 등)
+      const md = text.match(/(?<!\d)(\d{1,2})\s*월\s*(\d{1,2})\s*일/)
+      if (md) {
+        const month = +md[1]
+        const day = +md[2]
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+          return normalizeDate(year, month, day, ambiguity)
+        }
+      }
+      // 월만 있고 일이 없는 경우: 연도+월만이라도 살린다(일은 null → guide/3주 유도)
+      const mo = text.match(/(?<!\d)(\d{1,2})\s*월(?!\s*\d)/)
+      if (mo) {
+        const month = +mo[1]
+        if (month >= 1 && month <= 12) {
+          return { year, month, day: null }
+        }
+      }
+      // 월·일 모두 없으면 연도만
+      return { year, month: null, day: null }
+    }
   }
 
   return { year: null, month: null, day: null }
