@@ -12,6 +12,20 @@ export const SHELL_HTML = `<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>천기누설 만신보감 · 사주 답글 작성실</title>
+  <meta name="description" content="천기누설 만신보감 — 사주 답글 작성실. 운영자 전용 사주 답글 작성 도구입니다." />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="천기누설 만신보감 · 사주 답글 작성실" />
+  <meta property="og:description" content="천기누설 만신보감 — 운영자 전용 사주 답글 작성실입니다." />
+  <meta property="og:image" content="https://5d4f2df2-0e67-4bfa-8d04-04c9e806ebe3.vip.gensparksite.com/static/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:url" content="https://5d4f2df2-0e67-4bfa-8d04-04c9e806ebe3.vip.gensparksite.com/" />
+  <meta property="og:site_name" content="천기누설 만신보감" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="천기누설 만신보감 · 사주 답글 작성실" />
+  <meta name="twitter:description" content="천기누설 만신보감 — 운영자 전용 사주 답글 작성실입니다." />
+  <meta name="twitter:image" content="https://5d4f2df2-0e67-4bfa-8d04-04c9e806ebe3.vip.gensparksite.com/static/og-image.png" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
@@ -30,7 +44,21 @@ export const SHELL_HTML = `<!DOCTYPE html>
 export function loginPageHtml(error: boolean): string {
   return `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>천기누설 만신보감 · 로그인</title>
+<title>천기누설 만신보감 · 사주 답글 작성실</title>
+<meta name="description" content="천기누설 만신보감 — 사주 답글 작성실. 운영자 전용 사주 답글 작성 도구입니다." />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="천기누설 만신보감 · 사주 답글 작성실" />
+<meta property="og:description" content="천기누설 만신보감 — 운영자 전용 사주 답글 작성실입니다." />
+<meta property="og:image" content="https://5d4f2df2-0e67-4bfa-8d04-04c9e806ebe3.vip.gensparksite.com/static/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:url" content="https://5d4f2df2-0e67-4bfa-8d04-04c9e806ebe3.vip.gensparksite.com/" />
+<meta property="og:site_name" content="천기누설 만신보감" />
+<meta property="og:locale" content="ko_KR" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="천기누설 만신보감 · 사주 답글 작성실" />
+<meta name="twitter:description" content="천기누설 만신보감 — 운영자 전용 사주 답글 작성실입니다." />
+<meta name="twitter:image" content="https://5d4f2df2-0e67-4bfa-8d04-04c9e806ebe3.vip.gensparksite.com/static/og-image.png" />
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@600;700&display=swap" rel="stylesheet"></head>
