@@ -17,6 +17,10 @@ export interface DraftResult {
   usage?: { input_tokens?: number; output_tokens?: number }
 }
 
+// 일시적(재시도 가능) 오류로 볼 HTTP 상태: 과부하·일시 장애·요청제한
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529])
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 export async function generateDraft(
   apiKey: string,
   model: string,
@@ -24,34 +28,61 @@ export async function generateDraft(
 ): Promise<DraftResult> {
   const payload = buildClaudePayload(block, model)
 
-  const res = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-    },
-    body: JSON.stringify(payload),
-  })
+  // 일시적 서버 오류(500/529 등)는 지수 백오프로 최대 3회까지 재시도한다.
+  const maxAttempts = 4
+  let lastErr: Error | null = null
 
-  const data: any = await res.json()
-  if (!res.ok) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let res: Response
+    try {
+      res = await fetch(ANTHROPIC_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        body: JSON.stringify(payload),
+      })
+    } catch (e: any) {
+      // 네트워크 단절 등 — 재시도 대상
+      lastErr = new Error(`Claude API 연결 실패: ${e?.message ?? e}`)
+      if (attempt < maxAttempts) {
+        await sleep(500 * 2 ** (attempt - 1)) // 0.5s, 1s, 2s
+        continue
+      }
+      throw lastErr
+    }
+
+    const data: any = await res.json().catch(() => ({}))
+
+    if (res.ok) {
+      // content: [{type:'text', text:'...'}]
+      const text = (data.content ?? [])
+        .filter((b: any) => b.type === 'text')
+        .map((b: any) => b.text)
+        .join('\n')
+        .trim()
+
+      return {
+        text,
+        model: data.model ?? model,
+        usage: data.usage,
+      }
+    }
+
     const msg = data?.error?.message || res.statusText
-    throw new Error(`Claude API 오류(${res.status}): ${msg}`)
+    lastErr = new Error(`Claude API 오류(${res.status}): ${msg}`)
+
+    // 재시도 가능한 상태면 백오프 후 다시 시도, 아니면 즉시 실패
+    if (RETRYABLE_STATUS.has(res.status) && attempt < maxAttempts) {
+      await sleep(500 * 2 ** (attempt - 1)) // 0.5s, 1s, 2s
+      continue
+    }
+    throw lastErr
   }
 
-  // content: [{type:'text', text:'...'}]
-  const text = (data.content ?? [])
-    .filter((b: any) => b.type === 'text')
-    .map((b: any) => b.text)
-    .join('\n')
-    .trim()
-
-  return {
-    text,
-    model: data.model ?? model,
-    usage: data.usage,
-  }
+  throw lastErr ?? new Error('Claude API 호출 실패')
 }
 
 // ─────────────────────────────────────────────────────────────────
