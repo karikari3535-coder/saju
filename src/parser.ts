@@ -51,6 +51,20 @@ export interface ParsedComment {
   hourEstimated?: boolean
   /** 영상 제목 연도로 연도를 채웠는지 (analyze 단계에서 세팅) */
   yearFromTitle?: boolean
+  /**
+   * 시청자가 사주 네 기둥을 간지(干支)로 직접 적어준 경우(예: '경술.신사.계사.계해').
+   * 일주(day)가 있으면 saju 계산을 날짜 대신 이 간지로 바로 한다.
+   * 없으면 null.
+   */
+  pillars?: GanjiPillars | null
+}
+
+/** 간지 한글 2글자 기둥 (예: '경술'). 모르면 null */
+export interface GanjiPillars {
+  year: string | null
+  month: string | null
+  day: string | null
+  hour: string | null
 }
 
 /** 감정/관심사 키워드 — 매칭되면 그 단어를 그대로 수집 */
@@ -101,11 +115,38 @@ export function parseComment(raw: string): ParsedComment {
     rawText: text,
     isLeapMonth: false,
     hourEstimated: false,
+    pillars: null,
   }
 
   if (!text) {
     ambiguity.push('댓글이 비어 있어요.')
     result.missingFields = ['태어난 연도(몇 년생)', '태어난 월', '태어난 일']
+    return result
+  }
+
+  // ── 0) 간지(干支) 사주 네 기둥 직접 입력 인식 ──────────────────
+  //   예: "경술.신사.계사.계해 여성" / "경술 신사 계사 계해"
+  //   시청자가 사주를 간지로 이미 계산해서 적어준 경우. 날짜보다 먼저 본다.
+  const pillars = extractGanjiPillars(text)
+  if (pillars) {
+    result.pillars = pillars
+    // 성별·시각·질문·감정은 아래 공통 로직에서 계속 채운다.
+    result.gender = extractGender(text)
+    result.question = extractQuestion(text)
+    const foundEmotion: string[] = []
+    for (const w of EMOTION_WORDS) {
+      if (text.includes(w) && !foundEmotion.includes(w)) foundEmotion.push(w)
+      if (foundEmotion.length >= 6) break
+    }
+    result.emotionKeywords = foundEmotion
+    if (CRISIS_WORDS.some((w) => text.includes(w))) {
+      ambiguity.push('⚠️ 위기 신호가 감지됐어요. 답글에 자살예방상담전화 109 안내를 포함하세요.')
+    }
+    // 간지로 사주가 확정되므로 되묻기 대상이 아니다.
+    result.found = true
+    result.missingFields = []
+    const pieces = [pillars.year, pillars.month, pillars.day, pillars.hour].filter(Boolean)
+    ambiguity.push(`사주 네 기둥을 간지(${pieces.join('·')})로 직접 적어주셔서 그대로 풀었어요.`)
     return result
   }
 
@@ -472,4 +513,69 @@ function extractQuestion(text: string): string | null {
   if (m) return m[0].trim().slice(0, 200)
 
   return null
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 간지(干支) 사주 기둥 추출
+// ─────────────────────────────────────────────────────────────────
+
+/** 천간 10 / 지지 12 (한글) */
+const STEMS_KO = ['갑', '을', '병', '정', '무', '기', '경', '신', '임', '계']
+const BRANCHES_KO = ['자', '축', '인', '묘', '진', '사', '오', '미', '신', '유', '술', '해']
+
+/**
+ * "경술.신사.계사.계해 여성" 같은 댓글에서 사주 네(또는 세) 기둥의 간지를 추출한다.
+ *
+ * 인식 규칙:
+ *  - 천간 1글자 + 지지 1글자로 된 유효한 간지("경술")가
+ *    구분자(점·공백·쉼표·가운뎃점)로 이어 3개 이상 연달아 나올 때만 사주 기둥으로 본다.
+ *  - 3개면 연·월·일주, 4개면 연·월·일·시주로 본다.
+ *    (간지 사주는 보통 연→월→일→시 순서로 적는다.)
+ *  - 2개 이하의 우연한 간지(예: '신사'='辛巳'가 문장 일부)는 오탐 방지를 위해 무시.
+ *
+ * @returns 기둥 객체(일주는 항상 존재). 사주 간지로 보이지 않으면 null.
+ */
+function extractGanjiPillars(text: string): GanjiPillars | null {
+  // 간지 한 개 = 천간+지지. 전역으로 위치까지 함께 스캔한다.
+  const stemClass = STEMS_KO.join('')
+  const branchClass = BRANCHES_KO.join('')
+  const ganjiRe = new RegExp(`[${stemClass}][${branchClass}]`, 'g')
+
+  // 본문에서 간지 토큰과 그 위치를 모은다.
+  const tokens: { ganji: string; index: number }[] = []
+  let mm: RegExpExecArray | null
+  while ((mm = ganjiRe.exec(text)) !== null) {
+    tokens.push({ ganji: mm[0], index: mm.index })
+  }
+  if (tokens.length < 3) return null
+
+  // 연속(인접) 간지 묶음 중 가장 긴 것을 찾는다.
+  //   토큰 사이에 구분자(점·공백·쉼표·가운뎃점·하이픈·슬래시)만 있을 때 "연속"으로 본다.
+  let best: { ganji: string; index: number }[] = []
+  let run: { ganji: string; index: number }[] = [tokens[0]]
+  for (let i = 1; i < tokens.length; i++) {
+    const prev = tokens[i - 1]
+    const cur = tokens[i]
+    // 두 간지 사이의 글자
+    const between = text.slice(prev.index + 2, cur.index)
+    if (/^[\s.,·ㆍ\-\/]*$/.test(between)) {
+      run.push(cur)
+    } else {
+      if (run.length > best.length) best = run
+      run = [cur]
+    }
+  }
+  if (run.length > best.length) best = run
+
+  if (best.length < 3) return null
+
+  // 최대 4개까지만 기둥으로 사용 (연·월·일·시)
+  const ganjis = best.slice(0, 4).map((t) => t.ganji)
+
+  if (ganjis.length === 3) {
+    // 연·월·일주 (시주 없음)
+    return { year: ganjis[0], month: ganjis[1], day: ganjis[2], hour: null }
+  }
+  // 4개: 연·월·일·시주
+  return { year: ganjis[0], month: ganjis[1], day: ganjis[2], hour: ganjis[3] }
 }

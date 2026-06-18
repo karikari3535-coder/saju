@@ -181,6 +181,17 @@ function mergeInput(parsed: ReturnType<typeof parseComment>, body: any): SajuInp
   const gender =
     body.gender === '남' || body.gender === '여' ? body.gender : parsed.gender
 
+  // 간지(干支) 기둥 직접 입력: body.pillars 우선, 없으면 파서가 인식한 parsed.pillars
+  const pillars =
+    body.pillars && typeof body.pillars === 'object'
+      ? {
+          year: body.pillars.year ?? null,
+          month: body.pillars.month ?? null,
+          day: body.pillars.day ?? null,
+          hour: body.pillars.hour ?? null,
+        }
+      : parsed.pillars ?? null
+
   return {
     year: year as number,
     month: month as number,
@@ -191,6 +202,7 @@ function mergeInput(parsed: ReturnType<typeof parseComment>, body: any): SajuInp
     calendar,
     isLeapMonth: body.isLeapMonth ?? parsed.isLeapMonth,
     hourEstimated: parsed.hourEstimated && body.hour == null && num(body.hour) === null,
+    pillars: pillars && pillars.day ? pillars : null,
   }
 }
 
@@ -244,8 +256,10 @@ app.post('/api/analyze', async (c) => {
   const input = mergeInput(parsed, body)
 
   // none 모드: 연·월·일 단서가 전혀 없음 → 계산 불가, 안내
+  //   단, 간지(干支) 기둥을 직접 적어준 경우(input.pillars.day)는 날짜 없이도 계산 가능.
   const noClue =
-    input.year == null && input.month == null && input.day == null
+    input.year == null && input.month == null && input.day == null &&
+    !(input.pillars && input.pillars.day)
   if (noClue) {
     return c.json({
       ok: false,

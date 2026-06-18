@@ -30,8 +30,20 @@
 import {
   calculateFourPillars,
   FIVE_ELEMENTS,
+  HEAVENLY_STEMS,
+  HEAVENLY_STEMS_HANJA,
+  EARTHLY_BRANCHES,
+  EARTHLY_BRANCHES_HANJA,
+  getHeavenlyStemElement,
+  getEarthlyBranchElement,
+  getTenGodChart,
+  getVoidBranches,
   lunarToSolar,
   type Gender,
+  type HeavenlyStem,
+  type EarthlyBranch,
+  type FourPillars,
+  type Pillar,
 } from 'manseryeok'
 
 export type SajuMode = 'full' | 'three_pillar' | 'estimate' | 'guide'
@@ -51,6 +63,22 @@ export interface SajuInput {
   isLeapMonth?: boolean
   /** 시간 추정 여부(추정이면 estimate 모드) */
   hourEstimated?: boolean
+  /**
+   * 간지(干支) 기둥 직접 입력.
+   * 시청자가 사주 네 기둥을 간지로 적어준 경우(예: '경술.신사.계사.계해'),
+   * 날짜 변환 없이 이 기둥들로 바로 사주를 계산한다.
+   * 일주(day)는 필수, 그 외 기둥은 없으면 null.
+   */
+  pillars?: GanjiPillarsInput | null
+}
+
+/** 간지 한글 2글자 기둥 (예: '경술'). 모르면 null */
+export interface GanjiPillarsInput {
+  year: string | null
+  month: string | null
+  /** 일주는 일간 산출을 위해 필수 */
+  day: string
+  hour: string | null
 }
 
 export interface PillarTextMap {
@@ -118,6 +146,15 @@ function toLibGender(g?: '남' | '여' | null): Gender | undefined {
 export function computeSaju(input: SajuInput): SajuResult {
   const notes: string[] = []
   const calendar: Calendar = input.calendar ?? 'solar'
+
+  // ── 0-A) 간지(干支) 기둥 직접 입력 → 날짜 변환 없이 바로 계산 ──
+  //   시청자가 '경술.신사.계사.계해'처럼 사주 네 기둥을 간지로 적어준 경우.
+  //   일주(일간)만 있으면 일간 기준 명리 데이터를 모두 역산할 수 있다.
+  if (input.pillars && input.pillars.day) {
+    const fromGanji = computeSajuFromGanji(input)
+    if (fromGanji) return fromGanji
+    // 간지 해석 실패 시 아래 일반 경로로 폴백
+  }
 
   // ── 0) 연도 등 필수 정보 부족 → guide(되묻기) 모드 ─────────────
   const missing: string[] = []
@@ -262,6 +299,136 @@ export function computeSaju(input: SajuInput): SajuResult {
 
 function addElement(count: FiveElements, el: string) {
   if (el in count) (count as Record<string, number>)[el] += 1
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 간지(干支) 직접 입력 → 사주 계산
+// ─────────────────────────────────────────────────────────────────
+
+/** '경술' 같은 한글 2글자 간지 → { stem, branch }. 유효하지 않으면 null */
+function parseGanji(
+  text: string | null | undefined,
+): { stem: HeavenlyStem; branch: EarthlyBranch } | null {
+  if (!text) return null
+  const s = text.trim()
+  if (s.length !== 2) return null
+  const stem = s[0] as HeavenlyStem
+  const branch = s[1] as EarthlyBranch
+  if (!(HEAVENLY_STEMS as readonly string[]).includes(stem)) return null
+  if (!(EARTHLY_BRANCHES as readonly string[]).includes(branch)) return null
+  return { stem, branch }
+}
+
+/** 천간 한글 → 한자 */
+function stemHanja(stem: HeavenlyStem): string {
+  const i = (HEAVENLY_STEMS as readonly string[]).indexOf(stem)
+  return i >= 0 ? HEAVENLY_STEMS_HANJA[i] : stem
+}
+/** 지지 한글 → 한자 */
+function branchHanja(branch: EarthlyBranch): string {
+  const i = (EARTHLY_BRANCHES as readonly string[]).indexOf(branch)
+  return i >= 0 ? EARTHLY_BRANCHES_HANJA[i] : branch
+}
+
+/**
+ * 간지 4기둥(연·월·일·시) 입력으로 사주 결과를 만든다.
+ * 일주(일간/일지)는 필수, 나머지 기둥은 없으면 해당 칸을 비운다.
+ * 대운(大運)은 출생 절기 정보가 필요해 간지 입력만으로는 계산하지 않는다.
+ *
+ * @returns 일주 파싱 실패 시 null (호출부에서 일반 경로로 폴백)
+ */
+function computeSajuFromGanji(input: SajuInput): SajuResult | null {
+  const p = input.pillars!
+  const dayP = parseGanji(p.day)
+  if (!dayP) return null // 일주가 없거나 잘못되면 간지 경로 불가
+
+  const yearP = parseGanji(p.year)
+  const monthP = parseGanji(p.month)
+  const hourP = parseGanji(p.hour)
+
+  const notes: string[] = []
+  notes.push('시청자가 사주 네 기둥을 간지(干支)로 직접 적어주셔서, 생년월일 변환 없이 그 간지로 바로 풀었어요.')
+
+  // 시주 유무로 모드 결정 (간지 입력은 추정/estimate 개념 없이 명시값으로 본다)
+  const timeKnown = !!hourP
+  const mode: SajuMode = timeKnown ? 'full' : 'three_pillar'
+  if (!timeKnown) {
+    notes.push('시주(時柱) 간지가 없어 세 기둥으로 봤어요.')
+  }
+  if (!yearP) notes.push('연주(年柱) 간지가 없어 띠·연운 해석은 제한될 수 있어요.')
+  if (!monthP) notes.push('월주(月柱) 간지가 없어 격국·월령 해석은 제한될 수 있어요.')
+
+  const includeHour = timeKnown
+
+  const pillarsText: PillarTextMap = {
+    year: yearP ? yearP.stem + yearP.branch : null,
+    month: monthP ? monthP.stem + monthP.branch : null,
+    day: dayP.stem + dayP.branch,
+    hour: includeHour && hourP ? hourP.stem + hourP.branch : null,
+  }
+  const pillarsHanja: PillarTextMap = {
+    year: yearP ? stemHanja(yearP.stem) + branchHanja(yearP.branch) : null,
+    month: monthP ? stemHanja(monthP.stem) + branchHanja(monthP.branch) : null,
+    day: stemHanja(dayP.stem) + branchHanja(dayP.branch),
+    hour: includeHour && hourP ? stemHanja(hourP.stem) + branchHanja(hourP.branch) : null,
+  }
+
+  // 오행 분포 — 존재하는 기둥의 천간·지지만 집계
+  const fiveElements = EMPTY_ELEMENTS()
+  const presentPillars: { stem: HeavenlyStem; branch: EarthlyBranch }[] = [dayP]
+  if (yearP) presentPillars.push(yearP)
+  if (monthP) presentPillars.push(monthP)
+  if (includeHour && hourP) presentPillars.push(hourP)
+  for (const pp of presentPillars) {
+    addElement(fiveElements, getHeavenlyStemElement(pp.stem))
+    addElement(fiveElements, getEarthlyBranchElement(pp.branch))
+  }
+
+  // 십신 — 일간 기준. 라이브러리는 FourPillars(4기둥) 전체를 요구하므로
+  //   빠진 기둥은 일주로 채워 계산한 뒤, 없는 기둥의 십신은 null 로 비운다.
+  const fill = (q: { stem: HeavenlyStem; branch: EarthlyBranch } | null): Pillar => ({
+    heavenlyStem: (q ?? dayP).stem,
+    earthlyBranch: (q ?? dayP).branch,
+  })
+  const fourForGods: FourPillars = {
+    year: fill(yearP),
+    month: fill(monthP),
+    day: { heavenlyStem: dayP.stem, earthlyBranch: dayP.branch },
+    hour: fill(includeHour ? hourP : null),
+  }
+  const chart = getTenGodChart(fourForGods)
+  const tenGods: TenGodsOut = {
+    year: yearP ? chart.year.stem : null,
+    month: monthP ? chart.month.stem : null,
+    hour: includeHour && hourP ? chart.hour.stem : null,
+  }
+
+  // 공망 — 일주 기준
+  let voidBranches: string[] = []
+  try {
+    voidBranches = [...getVoidBranches(dayP.stem, dayP.branch)]
+  } catch {
+    voidBranches = []
+  }
+
+  return {
+    pillarsText,
+    pillarsHanja,
+    dayStem: dayP.stem,
+    dayBranch: dayP.branch,
+    fiveElements,
+    tenGods,
+    voidBranches,
+    daewoon: null, // 간지 입력만으로는 대운(절기 일수) 계산 불가
+    mode,
+    flags: {
+      mode,
+      timeKnown,
+      calendar: input.calendar ?? 'solar',
+      dayStemConfirmed: true,
+    },
+    notes,
+  }
 }
 
 /** guide(되묻기) 결과 — 계산 보류 */
