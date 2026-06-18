@@ -251,6 +251,54 @@ function extractDate(
     return normalizeDate(year, +m[2], +m[3], ambiguity)
   }
 
+  // 패턴 A1b: "72년1015일생" / "1972년1015생" — 연도('X년') 뒤에 구분자 없이
+  //   월·일을 3~4자리로 붙여 쓰고 '일생'/'생'으로 끝나는 형태.
+  //   "1015" → 10월 15일, "315" → 3월 15일, "0315" → 3월 15일.
+  //   4자리: MMDD, 3자리: MDD 로 해석한다. 월 1~12 / 일 1~31 검증.
+  //   4자리 연도 우선.
+  {
+    const tryConcatMD = (
+      year: number,
+      digits: string,
+      yearLabel: string | null,
+    ): { year: number; month: number; day: number } | null => {
+      let mo: number, da: number
+      if (digits.length === 4) {
+        mo = +digits.slice(0, 2)
+        da = +digits.slice(2, 4)
+      } else if (digits.length === 3) {
+        mo = +digits.slice(0, 1)
+        da = +digits.slice(1, 3)
+      } else {
+        return null
+      }
+      if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) {
+        if (yearLabel) {
+          ambiguity.push(`연도를 2자리(${yearLabel})로 적어 ${year}년으로 추정했어요. 확인해 주세요.`)
+        }
+        ambiguity.push(`'${digits}'을(를) ${mo}월 ${da}일로 봤어요. 확인해 주세요.`)
+        return { year, month: mo, day: da }
+      }
+      return null
+    }
+    // 4자리 연도 + 붙은 월일(3~4자리) + (선택)일/생
+    let mc = text.match(/(?<!\d)(19\d{2}|20\d{2})\s*년\s*(\d{3,4})\s*일?\s*생/)
+    if (!mc) mc = text.match(/(?<!\d)(19\d{2}|20\d{2})\s*년\s*(\d{3,4})\s*일/)
+    if (mc) {
+      const r = tryConcatMD(+mc[1], mc[2], null)
+      if (r) return r
+    }
+    // 2자리 연도 + 붙은 월일(3~4자리) + (선택)일/생
+    let mc2 = text.match(/(?<!\d)(\d{2})\s*년\s*(\d{3,4})\s*일?\s*생/)
+    if (!mc2) mc2 = text.match(/(?<!\d)(\d{2})\s*년\s*(\d{3,4})\s*일/)
+    if (mc2) {
+      const yy = +mc2[1]
+      const year = yy <= 25 ? 2000 + yy : 1900 + yy
+      const r = tryConcatMD(year, mc2[2], mc2[1])
+      if (r) return r
+    }
+  }
+
   // 패턴 A3: 혼합형 — "69년.4.17" / "1990년.5.15" (연도는 'X년', 월·일은 점·하이픈·슬래시)
   //   "69년.4.17(음력)" 처럼 연도 뒤에 점으로 월·일을 구분한 경우.
   //   4자리 연도 우선.
@@ -393,12 +441,22 @@ function extractDate(
         }
       }
       // 월만 있고 일이 없는 경우: 연도+월만이라도 살린다(일은 null → guide/3주 유도)
-      const mo = text.match(/(?<!\d)(\d{1,2})\s*월(?!\s*\d)/)
-      if (mo) {
-        const month = +mo[1]
-        if (month >= 1 && month <= 12) {
-          return { year, month, day: null }
-        }
+      //   단, "지금 6월 중순", "7월초", "6월까지" 처럼 출생이 아닌 '현재 시점/기간'을
+      //   가리키는 월을 출생월로 오인하면 안 된다. 그런 정황의 월은 건너뛴다.
+      //   텍스트 안의 모든 'N월' 후보를 보고, 출생월로 볼 수 없는 건 제외한다.
+      const monthRe = /(?<!\d)(\d{1,2})\s*월/g
+      let mob: RegExpExecArray | null
+      while ((mob = monthRe.exec(text)) !== null) {
+        const month = +mob[1]
+        if (month < 1 || month > 12) continue
+        // 'N월' 바로 뒤에 숫자(N월N… → 위에서 처리됨)면 건너뜀
+        const after = text.slice(mob.index + mob[0].length, mob.index + mob[0].length + 8)
+        const before = text.slice(Math.max(0, mob.index - 6), mob.index)
+        // 현재 시점/기간 표현이 붙으면 출생월이 아님
+        if (/^(중순|초순|초|말|말일|경|까지|부터|쯤|달|에는|에|중|안|내)/.test(after.trim())) continue
+        if (/(지금|현재|올해|이번|다음|내년|작년|오는|요즘|최근)\s*$/.test(before)) continue
+        // 살아남은 첫 번째 월만 출생월 후보로 채택
+        return { year, month, day: null }
       }
       // 월·일 모두 없으면 연도만
       return { year, month: null, day: null }
