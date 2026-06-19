@@ -350,6 +350,14 @@ app.get('/api/youtube/comments', async (c) => {
   }
   const videoIdRaw = c.req.query('videoId') ?? ''
   const target = extractYoutubeTarget(videoIdRaw)
+  // 채널 링크(@핸들 / channel/UC...)를 영상 수집에 넣으면 영상으로 오인하지 말고 안내한다.
+  if (target.kind === 'channel') {
+    return c.json({
+      ok: false,
+      error: '채널 링크네요. 이건 영상이 아니라 채널이라서 댓글을 바로 불러올 수 없어요. 채널 스캔으로 영상 목록을 먼저 불러온 뒤 영상을 골라 주세요.',
+      kind: 'channel',
+    }, 400)
+  }
   const videoId = target.kind === 'video' ? target.id : videoIdRaw
   if (!videoId) return c.json({ ok: false, error: 'videoId가 필요해요.' }, 400)
 

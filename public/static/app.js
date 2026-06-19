@@ -216,19 +216,21 @@ function extractVideoId(raw) {
   return any ? any[1] : s;
 }
 
-// 입력 링크가 '채널'인지 '영상'인지 자동 판단 (서버 parser.ts와 동일 규칙)
+// 입력 링크가 '채널'인지 '영상'인지 자동 판단 (서버 youtube.ts와 동일 규칙)
 function detectLinkKind(raw) {
-  const s = (raw || '').trim();
+  let s = (raw || '').trim();
   if (!s) return 'unknown';
+  // 퍼센트 인코딩된 한글 핸들(@%EC%B2%...)을 디코드해서 판별 (실패해도 원본 사용)
+  try { if (/%[0-9A-Fa-f]{2}/.test(s)) s = decodeURIComponent(s); } catch (_) {}
   // 영상 단서 우선
   const videoRe = [/[?&]v=[A-Za-z0-9_-]{11}/, /youtu\.be\/[A-Za-z0-9_-]{11}/, /\/shorts\//, /\/embed\//, /\/live\//, /studio\.youtube\.com\/video\//];
   if (videoRe.some(re => re.test(s))) return 'video';
-  // 채널 단서
+  // 채널 단서 — 핸들에는 한글(가-힣)도 올 수 있다(예: @천기누설만신보감2)
   if (/\/channel\/UC[A-Za-z0-9_-]{20,}/.test(s)) return 'channel';
   if (/^UC[A-Za-z0-9_-]{20,}$/.test(s)) return 'channel';
-  if (/youtube\.com\/@[A-Za-z0-9_.\-]+/.test(s)) return 'channel';
-  if (/^@[A-Za-z0-9_.\-]+$/.test(s)) return 'channel';
-  if (/youtube\.com\/(user|c)\/[A-Za-z0-9_.\-]+/.test(s)) return 'channel';
+  if (/youtube\.com\/@[\w.\-가-힣]+/.test(s)) return 'channel';
+  if (/^@[\w.\-가-힣]+$/.test(s)) return 'channel';
+  if (/youtube\.com\/(user|c)\/[\w.\-가-힣]+/.test(s)) return 'channel';
   // 순수 11자리 → 영상
   if (/^[A-Za-z0-9_-]{11}$/.test(s) && !s.includes('/') && !s.includes('.')) return 'video';
   if (/youtube\.com|youtu\.be/.test(s)) return 'video';

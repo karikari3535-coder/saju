@@ -66,8 +66,12 @@ export function extractBirthYearFromTitle(title: string): number | null {
 
 /** 입력 한 줄에서 유튜브 대상(채널/영상)을 추출 */
 export function extractYoutubeTarget(input: string): YoutubeTarget {
-  const raw = (input ?? '').trim()
+  let raw = (input ?? '').trim()
   if (!raw) return { kind: 'unknown', raw }
+  // 퍼센트 인코딩된 한글 핸들(@%EC%B2%...)을 디코드 (실패하면 원본 유지)
+  if (/%[0-9A-Fa-f]{2}/.test(raw)) {
+    try { raw = decodeURIComponent(raw) } catch { /* 원본 유지 */ }
+  }
 
   // 영상 단서 우선
   let m = raw.match(/[?&]v=([\w-]{11})/)
