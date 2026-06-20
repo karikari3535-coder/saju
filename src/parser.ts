@@ -151,10 +151,12 @@ export function parseComment(raw: string): ParsedComment {
   }
 
   // ── 1) 음/양력 표기 ───────────────────────────────────────────
+  //   "음력"/"음달" 외에도 날짜 옆 괄호 단독 표기 "(음)" / "( 음 )" / "[음]" 도 음력으로 인식한다.
+  //   (단독 "음"은 마음·처음·다음 등 오탐이 많으므로, 괄호로 감싼 경우만 인정)
   let calendarMentioned = false
-  if (/음력|음\s*달|陰曆/.test(text)) { result.calendar = 'lunar'; calendarMentioned = true }
+  if (/음력|음\s*달|陰曆|[(（[]\s*음\s*[)）\]]/.test(text)) { result.calendar = 'lunar'; calendarMentioned = true }
   if (/윤\s*달|윤달|閏/.test(text)) result.isLeapMonth = true
-  if (/양력|陽曆/.test(text)) { result.calendar = 'solar'; calendarMentioned = true }
+  if (/양력|陽曆|[(（[]\s*양\s*[)）\]]/.test(text)) { result.calendar = 'solar'; calendarMentioned = true }
 
   // ── 2) 생년월일 추출 ──────────────────────────────────────────
   const date = extractDate(text, ambiguity)
