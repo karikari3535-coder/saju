@@ -468,7 +468,15 @@ app.post('/api/batch', async (c) => {
         }
 
         // 사주 단서가 전혀 없으면 건너뜀
-        if (parsed.year == null && parsed.month == null && parsed.day == null) {
+        //   ※ 간지(干支)로 네 기둥을 직접 적어준 댓글(parsed.pillars)은
+        //     생년월일 숫자(year/month/day)가 없어도 사주 계산이 가능하므로 건너뛰면 안 된다.
+        //     (예: "을묘년경진월기유일임신시" → year/month/day는 null이지만 pillars로 풀이 가능)
+        if (
+          parsed.year == null &&
+          parsed.month == null &&
+          parsed.day == null &&
+          !parsed.pillars
+        ) {
           results[i] = { comment_id: item.comment_id, author, text, skipped: true }
           skipped++
           continue
