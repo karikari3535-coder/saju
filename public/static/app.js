@@ -156,7 +156,11 @@ async function doAnalyze() {
     state.draft = '';
     // mode==='none' (사주 단서 전혀 없음) 일 때만 에러 안내.
     // mode==='guide' (연도 등 일부 누락)는 정상 흐름 → "되묻는 답글" 생성 가능.
-    if (!data.ok && data.mode === 'none') {
+    // mode==='review' (비판·시비·AI 질문) → AI 답글 생성 금지, 사장님 직접 답변 권장.
+    if (!data.ok && data.mode === 'review') {
+      state.error = '🛑 검토 필요 (사장님 직접 답변 권장): ' +
+        (data.message || '비판·시비·AI 질문 등 사람이 직접 답해야 하는 댓글이에요.');
+    } else if (!data.ok && data.mode === 'none') {
       state.error = data.message || '생년월일을 확인할 수 없습니다.';
     }
   } catch (e) {
@@ -182,6 +186,9 @@ async function doDraft() {
       videoBirthYear: state.youtube.videoBirthYear ?? null,
     });
     if (data.ok) state.draft = data.draft;
+    else if (data.mode === 'review')
+      state.error = '🛑 검토 필요 (사장님 직접 답변 권장): ' +
+        (data.message || '비판·시비·AI 질문 등 사람이 직접 답해야 하는 댓글이에요.');
     else state.error = data.error || 'AI 초안 생성 실패';
   } catch (e) {
     state.error = e?.response?.data?.error || e.message;
@@ -724,6 +731,13 @@ function ohengView(fe) {
 function analysisView() {
   const a = state.analysis;
   if (!a) return '';
+  if (!a.ok && a.mode === 'review') {
+    return `<div class="parchment rounded-xl p-5 fade-in border-l-4 border-rose-500 bg-rose-50/40">
+      <div class="flex items-center gap-2 text-rose-600 font-bold mb-2"><i class="fas fa-flag"></i> 검토 필요 — 사장님 직접 답변 권장</div>
+      <p class="text-stone-700">${esc(a.message)}</p>
+      <p class="text-xs text-stone-500 mt-2"><i class="fas fa-circle-info mr-1"></i>비판·시비·AI 질문 같은 댓글은 AI가 어설프게 답하면 오히려 분란이 커질 수 있어, 자동 답글을 만들지 않았어요. 사장님이 직접 상황에 맞게 답해 주세요.</p>
+    </div>`;
+  }
   if (!a.ok) {
     return `<div class="parchment rounded-xl p-5 fade-in border-l-4 border-rose-400">
       <div class="flex items-center gap-2 text-rose-600 font-semibold mb-2"><i class="fas fa-circle-info"></i> 안내 모드</div>
@@ -946,13 +960,14 @@ function channelBatchView() {
 function channelBatchVideoCard(entry) {
   const rows = entry.results || [];
   const withDraft = rows.filter(r => r.draft);
+  const reviewRows = rows.filter(r => r.mode === 'review');
   let statusLine = '';
   if (entry.status === 'pending') statusLine = '<span class="text-xs text-stone-400">대기 중…</span>';
   else if (entry.status === 'loading') statusLine = '<span class="text-xs text-amber-600"><span class="spinner"></span> 미답변 댓글 수집 중…</span>';
   else if (entry.status === 'generating') statusLine = '<span class="text-xs text-amber-600"><span class="spinner"></span> 답글을 짓는 중…</span>';
   else if (entry.status === 'empty') statusLine = '<span class="text-xs text-emerald-700"><i class="fas fa-circle-check mr-1"></i>미답변 사주 댓글이 없어요.</span>';
   else if (entry.status === 'error') statusLine = `<span class="text-xs text-rose-500"><i class="fas fa-circle-exclamation mr-1"></i>${esc(entry.error||'실패')}</span>`;
-  else if (entry.status === 'done') statusLine = entry.stats ? `<span class="text-xs text-stone-500">생성 ${entry.stats.generated} · 건너뜀 ${entry.stats.skipped} · 실패 ${entry.stats.failed}</span>` : '';
+  else if (entry.status === 'done') statusLine = entry.stats ? `<span class="text-xs text-stone-500">생성 ${entry.stats.generated} · 건너뜀 ${entry.stats.skipped}${entry.stats.review ? ` · <span class="text-rose-600 font-semibold">검토필요 ${entry.stats.review}</span>` : ''} · 실패 ${entry.stats.failed}</span>` : '';
 
   return `
   <div id="cbatch-${entry.video_id}" class="border border-stone-200 rounded-xl p-4 bg-white/50 space-y-3">
@@ -980,6 +995,13 @@ function channelBatchVideoCard(entry) {
           <textarea class="w-full border border-stone-200 rounded-lg p-3 draft-area bg-white/70 text-sm" rows="8">${esc(r.draft)}</textarea>
         </div>`;
       }).join('')}
+    </div>` : ''}
+    ${reviewRows.length ? `<div class="space-y-2">
+      <div class="text-xs font-semibold text-rose-600"><i class="fas fa-flag mr-1"></i>검토 필요 — 사장님 직접 답변 권장 (${reviewRows.length}개)</div>
+      ${reviewRows.map(r => `<div class="bg-rose-50 border border-rose-200 rounded-lg p-3 text-sm space-y-1">
+        <div class="text-xs text-rose-500"><i class="fas fa-user mr-1"></i>${esc(r.author||'')} · <span class="font-semibold">${esc(r.reviewReason||'사람이 직접 답해야 하는 댓글')}</span></div>
+        <div class="text-stone-700 bg-white/70 rounded p-2">${esc((r.text||'').replace(/\s+/g,' ').slice(0,200))}</div>
+      </div>`).join('')}
     </div>` : ''}
     ${(entry.status === 'done' && entry.truncated) ? `<div class="text-xs text-amber-700 bg-amber-50 rounded-lg p-2"><i class="fas fa-triangle-exclamation mr-1"></i>댓글이 많아 앞에서 일부만 처리했어요. 나머지 ${entry.truncated}개는 '열기'로 다시 처리해 주세요.</div>` : ''}
   </div>`;
@@ -1178,7 +1200,7 @@ function ocrResultsView() {
   <div id="ocr-results" class="border-t border-stone-200 pt-4 mt-4 space-y-4 fade-in">
     <div class="flex items-center justify-between flex-wrap gap-2">
       <h4 class="serif font-bold gold-text"><i class="fas fa-layer-group mr-2"></i>생성 결과</h4>
-      ${b.stats ? `<span class="text-xs text-stone-500">생성 ${b.stats.generated} · 되묻기/건너뜀 ${b.stats.skipped} · 실패 ${b.stats.failed}</span>` : ''}
+      ${b.stats ? `<span class="text-xs text-stone-500">생성 ${b.stats.generated} · 되묻기/건너뜀 ${b.stats.skipped}${b.stats.review ? ` · <span class="text-rose-600 font-semibold">검토필요 ${b.stats.review}</span>` : ''} · 실패 ${b.stats.failed}</span>` : ''}
     </div>
     ${b.error ? `<div class="bg-rose-50 text-rose-700 rounded-lg p-3 text-sm"><i class="fas fa-circle-exclamation mr-2"></i>${esc(b.error)}</div>` : ''}
     ${b.running ? `<div class="text-sm text-stone-500"><span class="spinner"></span> 답글을 짓고 있어요. 댓글 수에 따라 30초~1분 걸릴 수 있어요.</div>` : ''}
@@ -1189,6 +1211,12 @@ function ocrResultsView() {
     <div class="space-y-3">
       ${rows.map((r) => {
         const idxDraft = withDraft.indexOf(r);
+        if (r.mode === 'review') {
+          return `<div class="bg-rose-50 border border-rose-200 rounded-lg p-3 text-sm space-y-1">
+            <div class="text-xs text-rose-500"><i class="fas fa-flag mr-1"></i>@${esc(r.author||'')} · <span class="badge bg-rose-100 text-rose-700">검토 필요</span> <span class="font-semibold">${esc(r.reviewReason||'사장님 직접 답변 권장')}</span></div>
+            <div class="text-stone-700 bg-white/70 rounded p-2">${esc((r.text||'').replace(/\s+/g,' ').slice(0,200))}</div>
+          </div>`;
+        }
         if (r.skipped) {
           return `<div class="bg-stone-50 border border-stone-200 rounded-lg p-3 text-sm opacity-70">
             <div class="text-xs text-stone-400 mb-1">@${esc(r.author||'')} · <span class="text-stone-400">건너뜀(사주 정보 없음)</span></div>
@@ -1228,7 +1256,7 @@ function batchView() {
   <div id="batch-results" class="parchment rounded-xl p-5 fade-in space-y-4">
     <div class="flex items-center justify-between flex-wrap gap-2">
       <h3 class="serif text-lg font-bold gold-text"><i class="fas fa-layer-group mr-2"></i>일괄 생성 결과</h3>
-      ${b.stats ? `<span class="text-xs text-stone-500">생성 ${b.stats.generated} · 건너뜀 ${b.stats.skipped} · 실패 ${b.stats.failed}</span>` : ''}
+      ${b.stats ? `<span class="text-xs text-stone-500">생성 ${b.stats.generated} · 건너뜀 ${b.stats.skipped}${b.stats.review ? ` · <span class="text-rose-600 font-semibold">검토필요 ${b.stats.review}</span>` : ''} · 실패 ${b.stats.failed}</span>` : ''}
     </div>
     ${b.error ? `<div class="bg-rose-50 text-rose-700 rounded-lg p-3 text-sm"><i class="fas fa-circle-exclamation mr-2"></i>${esc(b.error)}</div>` : ''}
     ${b.running ? `<div class="text-sm text-stone-500"><span class="spinner"></span> 답글을 짓고 있어요. 댓글 수에 따라 30초~1분 정도 걸릴 수 있어요.</div>` : ''}
@@ -1240,6 +1268,12 @@ function batchView() {
     <div class="space-y-3">
       ${rows.map((r) => {
         const idxDraft = withDraft.indexOf(r);
+        if (r.mode === 'review') {
+          return `<div class="bg-rose-50 border border-rose-200 rounded-lg p-3 text-sm space-y-1">
+            <div class="text-xs text-rose-500"><i class="fas fa-flag mr-1"></i>@${esc(r.author||'')} · <span class="badge bg-rose-100 text-rose-700">검토 필요</span> <span class="font-semibold">${esc(r.reviewReason||'사장님 직접 답변 권장')}</span></div>
+            <div class="text-stone-700 bg-white/70 rounded p-2">${esc((r.text||'').replace(/\s+/g,' ').slice(0,200))}</div>
+          </div>`;
+        }
         if (r.skipped) {
           return `<div class="bg-stone-50 border border-stone-200 rounded-lg p-3 text-sm opacity-70">
             <div class="text-xs text-stone-400 mb-1">@${esc(r.author||'')} · <span class="text-stone-400">건너뜀(사주 정보 없음)</span></div>

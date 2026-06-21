@@ -57,6 +57,14 @@ export interface ParsedComment {
    * 없으면 null.
    */
   pillars?: GanjiPillars | null
+  /**
+   * 비판·시비·AI 여부 추궁 등 "사람이 직접 답해야 하는" 댓글이면 true.
+   * (예: "이거 AI냐?", "계산 틀렸다", "사기 아니냐" 등)
+   * true면 AI 답글을 자동 생성하지 않고 사장님 검토로 분리한다.
+   */
+  reviewNeeded?: boolean
+  /** reviewNeeded가 true일 때 그 사유(사장님 안내용) */
+  reviewReason?: string | null
 }
 
 /** 간지 한글 2글자 기둥 (예: '경술'). 모르면 null */
@@ -92,6 +100,57 @@ const CRISIS_WORDS = ['죽고싶', '죽고 싶', '자살', '극단적', '살기 
 /** 현재 연도 (나이대 계산용) */
 const NOW_YEAR = new Date().getFullYear()
 
+/**
+ * "사람이 직접 답해야 하는" 댓글(비판·시비·AI 추궁·계산오류 지적 등) 감지.
+ *   AI가 어설프게 답하면 오히려 분란을 키우므로, 이런 댓글은 자동 답글을 만들지 않고
+ *   "검토 필요(사장님 직접 답변 권장)"로 따로 분리한다.
+ *   @returns 감지되면 그 사유 문자열, 아니면 null
+ */
+export function detectReviewNeeded(raw: string): string | null {
+  const text = (raw ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+  if (!text) return null
+
+  // 1) AI 여부 추궁 — "이거 AI냐?", "ai가 쓴거 아니냐", "챗gpt", "복붙" 등
+  const aiSuspicion =
+    /\bai\b/.test(text) ||
+    /에이아이|인공지능|챗\s*gpt|챗지피티|chatgpt|gpt|봇이|기계가|로봇이|자동\s*답글|복붙|복사\s*붙여|돌려막기|템플릿/.test(
+      raw,
+    )
+  if (aiSuspicion) {
+    return 'AI/자동응답 여부를 묻거나 의심하는 댓글이에요. 사장님이 직접 답하시는 게 좋아요.'
+  }
+
+  // 2) 계산·풀이 오류 지적 — "틀렸다", "잘못됐다", "아니지", "오류", "엉터리"
+  //   ※ "안 맞다"(궁합·직업이 안 맞다 등)는 정상 사주 상담에서도 흔하므로 제외.
+  const errorClaim =
+    /틀렸|틀린|잘못\s*됐|잘못\s*된|잘못\s*됨|엉터리|말이\s*안\s*되|아니지|아니잖|어디서\s*배운|제대로\s*좀|공부\s*좀|모르면|풀이가?\s*이상|계산\s*(?:이|을)?\s*(?:틀|잘못|이상)/.test(
+      raw,
+    )
+  if (errorClaim) {
+    return '사주 풀이가 틀렸다고 지적하는 댓글이에요. 사장님이 직접 확인 후 답하시는 게 좋아요.'
+  }
+
+  // 3) 사기·불신·비난 — "사기", "돈벌이", "믿지마", "장사", "혹세무민", "신뢰"
+  //   ※ "신뢰가 간다"(긍정)와 충돌하지 않도록 '신뢰가' 단독은 제외, '신뢰 안 간다'류만.
+  //   '사기충천'(긍정어)만 오탐 방지로 제외하고, 그 외 '사기'는 불신성으로 본다.
+  const distrust =
+    (/사기/.test(raw) && !/사기\s*충천/.test(raw)) ||
+    /사기꾼|혹세무민|돈벌이|돈\s*벌려|미신|사이비|구라|거짓말|믿지\s*마|믿을\s*수\s*없|신뢰\s*안|신뢰\s*(?:가|는)?\s*안|양심\s*(?:이|은)?\s*없|부끄러운\s*줄/.test(
+      raw,
+    )
+  if (distrust) {
+    return '불신·비난성 댓글이에요. 사장님이 직접 대응 방향을 정하시는 게 좋아요.'
+  }
+
+  // 4) 노골적 욕설·비방
+  const insult = /시발|씨발|ㅅㅂ|개소리|병신|ㅄ|꺼져|닥쳐|미친|또라이|등신|멍청/.test(raw)
+  if (insult) {
+    return '공격적·욕설 댓글이에요. 사장님이 직접 판단하시는 게 좋아요.'
+  }
+
+  return null
+}
+
 export function parseComment(raw: string): ParsedComment {
   const text = (raw ?? '').trim()
   const ambiguity: string[] = []
@@ -116,6 +175,16 @@ export function parseComment(raw: string): ParsedComment {
     isLeapMonth: false,
     hourEstimated: false,
     pillars: null,
+    reviewNeeded: false,
+    reviewReason: null,
+  }
+
+  // 비판·시비·AI 추궁 등은 사람이 직접 답해야 하므로 표시만 해 둔다.
+  //   (사주 단서가 같이 있어도 우선 사장님 검토 대상으로 분리한다.)
+  const reviewReason = detectReviewNeeded(text)
+  if (reviewReason) {
+    result.reviewNeeded = true
+    result.reviewReason = reviewReason
   }
 
   if (!text) {

@@ -159,6 +159,7 @@ function publicParsed(p: ReturnType<typeof parseComment>) {
     missingFields: p.missingFields,
     rawText: p.rawText,
     ...(p.yearFromTitle ? { yearFromTitle: true } : {}),
+    ...(p.reviewNeeded ? { reviewNeeded: true, reviewReason: p.reviewReason ?? null } : {}),
   }
 }
 
@@ -255,6 +256,19 @@ app.post('/api/analyze', async (c) => {
 
   const input = mergeInput(parsed, body)
 
+  // review 모드: 비판·시비·AI 추궁 등 사람이 직접 답해야 하는 댓글
+  //   → AI 답글을 만들지 않고 "검토 필요(사장님 직접 답변 권장)"로 분리한다.
+  if (parsed.reviewNeeded) {
+    return c.json({
+      ok: false,
+      mode: 'review',
+      parsed: publicParsed(parsed),
+      message:
+        parsed.reviewReason ??
+        '사장님이 직접 답하시는 게 좋은 댓글이에요. (비판·시비·AI 질문 등)',
+    })
+  }
+
   // none 모드: 연·월·일 단서가 전혀 없음 → 계산 불가, 안내
   //   단, 간지(干支) 기둥을 직접 적어준 경우(input.pillars.day)는 날짜 없이도 계산 가능.
   const noClue =
@@ -310,6 +324,18 @@ app.post('/api/draft', async (c) => {
   }
   const comment: string = body.comment ?? ''
   const parsed = parseComment(comment)
+
+  // review 모드: 비판·시비·AI 추궁 등은 AI 답글을 만들지 않고 사장님 검토로 분리한다.
+  if (parsed.reviewNeeded) {
+    return c.json({
+      ok: false,
+      mode: 'review',
+      reviewReason: parsed.reviewReason ?? null,
+      message:
+        parsed.reviewReason ??
+        '사장님이 직접 답하시는 게 좋은 댓글이에요. (비판·시비·AI 질문 등)',
+    })
+  }
 
   // 영상 제목 연도 폴백: 댓글에 연도가 없으면 영상 제목 연도(videoBirthYear)로 가정한다.
   //   (analyze / batch 와 동일 규칙으로 통일)
@@ -443,6 +469,7 @@ app.post('/api/batch', async (c) => {
   let generated = 0
   let skipped = 0
   let failed = 0
+  let review = 0
 
   async function worker() {
     while (true) {
@@ -453,6 +480,19 @@ app.post('/api/batch', async (c) => {
       const author = item.author ?? ''
       try {
         const parsed = parseComment(text)
+
+        // review: 비판·시비·AI 추궁 등은 AI 답글을 만들지 않고 사장님 검토로 분리
+        if (parsed.reviewNeeded) {
+          results[i] = {
+            comment_id: item.comment_id,
+            author,
+            text,
+            mode: 'review',
+            reviewReason: parsed.reviewReason ?? null,
+          }
+          review++
+          continue
+        }
 
         // 영상(제목/썸네일) 연도 폴백 — 댓글별 연도(item.videoBirthYear)가 있으면 우선,
         //   없으면 요청 전체 공통 videoBirthYear 사용
@@ -512,7 +552,7 @@ app.post('/api/batch', async (c) => {
   return c.json({
     ok: true,
     results,
-    stats: { generated, skipped, failed },
+    stats: { generated, skipped, failed, review },
     truncated,
   })
 })
