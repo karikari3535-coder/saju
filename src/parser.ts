@@ -657,8 +657,10 @@ function extractGanjiPillars(text: string): GanjiPillars | null {
     const prev = tokens[i - 1]
     const cur = tokens[i]
     // 두 간지 사이의 글자
+    //   구분자(점·공백·쉼표 등) 외에 "년/월/일/시" 같은 기둥 라벨도 연속으로 본다.
+    //   예: "을묘년경진월기유일임신시" → 을묘(년)경진(월)기유(일)임신(시)
     const between = text.slice(prev.index + 2, cur.index)
-    if (/^[\s.,·ㆍ\-\/]*$/.test(between)) {
+    if (/^[\s.,·ㆍ\-\/년월일시年月日時生]*$/.test(between)) {
       run.push(cur)
     } else {
       if (run.length > best.length) best = run
