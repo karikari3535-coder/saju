@@ -299,6 +299,54 @@ export function parseComment(raw: string): ParsedComment {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// 한글(한자식) 숫자 → 정수 변환 (1~31 범위, 날짜용)
+//   "이십육"=26, "십"=10, "이십"=20, "삼십일"=31, "육"=6, "일"=1 …
+//   어르신 시청자들이 "유월이십육일"처럼 한글 숫자로 날짜를 쓰는 경우 대비.
+// ─────────────────────────────────────────────────────────────────
+const SINO_DIGIT: Record<string, number> = {
+  일: 1, 이: 2, 삼: 3, 사: 4, 오: 5,
+  육: 6, 칠: 7, 팔: 8, 구: 9,
+}
+/** "이십육"→26, "십"→10, "삼십"→30, "이십"→20, "구"→9, "삼십일"→31. 실패 시 null. */
+function koreanNumToInt(s: string): number | null {
+  const str = (s ?? '').trim()
+  if (!str) return null
+  // 순수 숫자가 섞여 들어오면 그대로 사용
+  if (/^\d+$/.test(str)) {
+    const n = +str
+    return n >= 1 && n <= 31 ? n : null
+  }
+  // 허용 글자만으로 구성되었는지 확인 (일이삼사오육칠팔구십)
+  if (!/^[일이삼사오육칠팔구십]+$/.test(str)) return null
+  const idx = str.indexOf('십')
+  let value: number
+  if (idx === -1) {
+    // 십이 없음 → 한 자리(또는 단독)
+    value = SINO_DIGIT[str] ?? NaN
+  } else {
+    const tensPart = str.slice(0, idx) // 십 앞 (없으면 1)
+    const onesPart = str.slice(idx + 1) // 십 뒤 (없으면 0)
+    const tens = tensPart ? (SINO_DIGIT[tensPart] ?? NaN) : 1
+    const ones = onesPart ? (SINO_DIGIT[onesPart] ?? NaN) : 0
+    value = tens * 10 + ones
+  }
+  if (!Number.isFinite(value) || value < 1 || value > 31) return null
+  return value
+}
+
+// 월(月) 한글 표기 → 숫자. 유월(6)·시월(10)은 불규칙(육월/십월 아님)이라 별도 매핑.
+//   정월=1, 동짓달=11, 섣달=12 같은 전통 표현도 함께 인식.
+const KOREAN_MONTH: Record<string, number> = {
+  정월: 1, 일월: 1,
+  이월: 2, 삼월: 3, 사월: 4, 오월: 5,
+  유월: 6, 육월: 6, // 표준은 '유월'이지만 '육월'로 쓰는 경우도 받음
+  칠월: 7, 팔월: 8, 구월: 9,
+  시월: 10, 십월: 10, // 표준은 '시월'이지만 '십월'로 쓰는 경우도 받음
+  십일월: 11, 동짓달: 11, 동지달: 11,
+  십이월: 12, 섣달: 12,
+}
+
+// ─────────────────────────────────────────────────────────────────
 // 날짜 추출
 // ─────────────────────────────────────────────────────────────────
 function extractDate(
@@ -509,6 +557,28 @@ function extractDate(
       if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
         ambiguity.push(`'${m[0].trim()}'을(를) ${month}월 ${day}일로 봤어요.`)
         return { year: null, month, day }
+      }
+    }
+  }
+
+  // 패턴 D3: 한글(한자식) 숫자 월·일 — "유월이십육일" / "정월 보름" 류
+  //   "음력으로 유월이십육일 시는 모르겠어요." 처럼 한글 숫자로만 적은 어르신 댓글 대비.
+  //   월은 KOREAN_MONTH(유월=6, 시월=10 등), 일은 koreanNumToInt로 변환.
+  //   연도는 null → 영상연도(70년생=1970) 폴백 대상.
+  {
+    // 월 키를 길이 내림차순으로 정렬해 "십일월"이 "일월"보다 먼저 매칭되도록 한다.
+    const monthKeys = Object.keys(KOREAN_MONTH).sort((a, b) => b.length - a.length)
+    for (const mk of monthKeys) {
+      // "유월이십육일" / "유월 이십육일" / "유월26일" 모두 허용. 일 글자수 1~4.
+      const re = new RegExp(`${mk}\\s*([일이삼사오육칠팔구십\\d]{1,4})\\s*일`)
+      const mm = text.match(re)
+      if (mm) {
+        const month = KOREAN_MONTH[mk]
+        const day = koreanNumToInt(mm[1])
+        if (month >= 1 && month <= 12 && day != null && day >= 1 && day <= 31) {
+          ambiguity.push(`'${mm[0].trim()}'을(를) ${month}월 ${day}일로 봤어요. 확인해 주세요.`)
+          return { year: null, month, day }
+        }
       }
     }
   }
