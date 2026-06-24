@@ -3,6 +3,18 @@
 // 흐름: 댓글 입력/수집 → 만세력 계산 → AI 초안 → 검토/복사
 // ============================================================
 
+// 모든 axios 요청 기본 타임아웃(안전망). AI 호출이 멈춰도 "생성중"에서 영원히
+//   매달리지 않도록 한다. 개별 호출은 아래 상수로 더 길게 덮어쓴다.
+axios.defaults.timeout = 60_000; // 60초 (기본)
+const AI_TIMEOUT = 120_000;       // AI 답글 1건 / OCR: 120초
+const BATCH_TIMEOUT = 300_000;    // 배치(여러 댓글 묶음): 300초
+// 타임아웃·네트워크 오류를 사장님이 알아볼 수 있는 한국어 메시지로 변환
+function friendlyAxiosError(e) {
+  if (e?.code === 'ECONNABORTED' || /timeout/i.test(e?.message || ''))
+    return '⏱️ 시간이 초과됐어요. 잠시 후 버튼을 다시 눌러 주세요. (서버가 응답하지 않거나 너무 오래 걸렸어요)';
+  return e?.response?.data?.error || e?.message || '알 수 없는 오류가 발생했어요. 다시 시도해 주세요.';
+}
+
 const OHENG = ['목', '화', '토', '금', '수'];
 const MODE_LABEL = {
   full: { t: '완전 (4기둥)', c: 'bg-green-100 text-green-700' },
@@ -164,7 +176,7 @@ async function doAnalyze() {
       state.error = data.message || '생년월일을 확인할 수 없습니다.';
     }
   } catch (e) {
-    state.error = e?.response?.data?.error || e.message;
+    state.error = friendlyAxiosError(e);
   } finally {
     state.loadingAnalyze = false; render();
   }
@@ -184,14 +196,14 @@ async function doDraft() {
       gender: inp.gender, calendar: inp.calendar,
       yearFromTitle: state.analysis.year_from_title ?? false,
       videoBirthYear: state.youtube.videoBirthYear ?? null,
-    });
+    }, { timeout: AI_TIMEOUT });
     if (data.ok) state.draft = data.draft;
     else if (data.mode === 'review')
       state.error = '🛑 검토 필요 (사장님 직접 답변 권장): ' +
         (data.message || '비판·시비·AI 질문 등 사람이 직접 답해야 하는 댓글이에요.');
     else state.error = data.error || 'AI 초안 생성 실패';
   } catch (e) {
-    state.error = e?.response?.data?.error || e.message;
+    state.error = friendlyAxiosError(e);
   } finally {
     state.loadingDraft = false; render();
   }
@@ -269,6 +281,7 @@ async function scanChannel(link) {
   try {
     const { data } = await axios.get('/api/youtube/channel', {
       params: { link, maxVideos: state.maxVideos },
+      timeout: AI_TIMEOUT,
     });
     if (data.ok) {
       state.channel.videos = data.videos || [];
@@ -278,7 +291,7 @@ async function scanChannel(link) {
       state.channel.error = data.error || '채널 스캔 실패';
     }
   } catch (e) {
-    state.channel.error = e?.response?.data?.error || e.message;
+    state.channel.error = friendlyAxiosError(e);
   } finally {
     state.channel.scanning = false; render();
   }
@@ -305,6 +318,7 @@ async function fetchYoutube() {
   try {
     const { data } = await axios.get('/api/youtube/comments', {
       params: { videoId: vid, maxPages: 3, onlySaju: true, onlyUnanswered: state.youtube.onlyUnanswered },
+      timeout: AI_TIMEOUT,
     });
     if (data.ok) {
       // 무시 목록에 있는 댓글은 빼고 표시
@@ -315,7 +329,7 @@ async function fetchYoutube() {
     }
     else state.error = data.error;
   } catch (e) {
-    state.error = e?.response?.data?.error || e.message;
+    state.error = friendlyAxiosError(e);
   } finally {
     state.youtube.loading = false; render();
   }
@@ -341,7 +355,7 @@ async function doBatchAll() {
     const { data } = await axios.post('/api/batch', {
       items,
       videoBirthYear: state.youtube.videoBirthYear ?? null,
-    });
+    }, { timeout: BATCH_TIMEOUT });
     if (data.ok) {
       state.batch.results = data.results || [];
       state.batch.stats = data.stats || null;
@@ -350,7 +364,7 @@ async function doBatchAll() {
       state.batch.error = data.error || '일괄 생성 실패';
     }
   } catch (e) {
-    state.batch.error = e?.response?.data?.error || e.message;
+    state.batch.error = friendlyAxiosError(e);
   } finally {
     state.batch.running = false; render();
     // 결과 영역으로 스크롤
@@ -435,7 +449,7 @@ async function runOcrExtract() {
   if (!state.ocr.image) return;
   state.ocr.extracting = true; state.ocr.error = ''; render();
   try {
-    const { data } = await axios.post('/api/ocr-comments', { image: state.ocr.image });
+    const { data } = await axios.post('/api/ocr-comments', { image: state.ocr.image }, { timeout: AI_TIMEOUT });
     if (data.ok) {
       state.ocr.items = (data.comments || []).map(c => ({
         author: c.author || '',
@@ -447,7 +461,7 @@ async function runOcrExtract() {
       state.ocr.error = data.error || '이미지 분석 실패';
     }
   } catch (e) {
-    state.ocr.error = e?.response?.data?.error || e.message;
+    state.ocr.error = friendlyAxiosError(e);
   } finally {
     state.ocr.extracting = false; render();
   }
@@ -486,7 +500,7 @@ async function ocrGenerate() {
   state.ocr.batch = { running: true, results: [], stats: null, error: '' };
   state.ocr.error = ''; render();
   try {
-    const { data } = await axios.post('/api/batch', { items });
+    const { data } = await axios.post('/api/batch', { items }, { timeout: BATCH_TIMEOUT });
     if (data.ok) {
       state.ocr.batch.results = data.results || [];
       state.ocr.batch.stats = data.stats || null;
@@ -495,7 +509,7 @@ async function ocrGenerate() {
       state.ocr.batch.error = data.error || '일괄 생성 실패';
     }
   } catch (e) {
-    state.ocr.batch.error = e?.response?.data?.error || e.message;
+    state.ocr.batch.error = friendlyAxiosError(e);
   } finally {
     state.ocr.batch.running = false; render();
     setTimeout(() => { const elx = document.getElementById('ocr-results'); if (elx) elx.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
@@ -541,6 +555,7 @@ async function processOneVideo(entry) {
     // 1) 미답변 사주 댓글 수집
     const { data: cd } = await axios.get('/api/youtube/comments', {
       params: { videoId: entry.video_id, maxPages: 3, onlySaju: true, onlyUnanswered: true },
+      timeout: AI_TIMEOUT,
     });
     if (!cd.ok) { entry.status = 'error'; entry.error = cd.error || '댓글 수집 실패'; render(); return; }
     const list = filterIgnored(cd.comments); // 무시 목록 제외
@@ -554,7 +569,7 @@ async function processOneVideo(entry) {
     const items = list.map(c => ({
       comment_id: c.comment_id, author: c.author, text: c.text, published_at: c.published_at,
     }));
-    const { data: bd } = await axios.post('/api/batch', { items, videoBirthYear: birthYear });
+    const { data: bd } = await axios.post('/api/batch', { items, videoBirthYear: birthYear }, { timeout: BATCH_TIMEOUT });
     if (!bd.ok) { entry.status = 'error'; entry.error = bd.error || '일괄 생성 실패'; render(); return; }
     entry.results = bd.results || [];
     entry.stats = bd.stats || null;
@@ -562,7 +577,7 @@ async function processOneVideo(entry) {
     entry.status = 'done';
   } catch (e) {
     entry.status = 'error';
-    entry.error = e?.response?.data?.error || e.message;
+    entry.error = friendlyAxiosError(e);
   } finally {
     render();
   }

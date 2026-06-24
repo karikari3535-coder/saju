@@ -21,6 +21,25 @@ export interface DraftResult {
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529])
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// 한 번의 Claude 호출이 이 시간을 넘기면 끊어서 "무한 생성중"을 막는다.
+//   (네트워크 stall·응답 지연 시 영원히 매달리지 않도록 AbortController로 강제 종료)
+const FETCH_TIMEOUT_MS = 90_000 // 90초
+
+/** fetch에 타임아웃을 입힌 래퍼. 시간 초과 시 AbortError를 던진다. */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function generateDraft(
   apiKey: string,
   model: string,
@@ -35,18 +54,27 @@ export async function generateDraft(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let res: Response
     try {
-      res = await fetch(ANTHROPIC_URL, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': ANTHROPIC_VERSION,
+      res = await fetchWithTimeout(
+        ANTHROPIC_URL,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': ANTHROPIC_VERSION,
+          },
+          body: JSON.stringify(payload),
         },
-        body: JSON.stringify(payload),
-      })
+        FETCH_TIMEOUT_MS,
+      )
     } catch (e: any) {
-      // 네트워크 단절 등 — 재시도 대상
-      lastErr = new Error(`Claude API 연결 실패: ${e?.message ?? e}`)
+      // 타임아웃(AbortError) 또는 네트워크 단절 등 — 재시도 대상
+      const isTimeout = e?.name === 'AbortError'
+      lastErr = new Error(
+        isTimeout
+          ? `Claude API 응답이 너무 오래 걸려요(90초 초과). 잠시 후 다시 시도해 주세요.`
+          : `Claude API 연결 실패: ${e?.message ?? e}`,
+      )
       if (attempt < maxAttempts) {
         await sleep(500 * 2 ** (attempt - 1)) // 0.5s, 1s, 2s
         continue
@@ -153,15 +181,27 @@ export async function extractCommentsFromImage(
     ],
   }
 
-  const res = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-    },
-    body: JSON.stringify(payload),
-  })
+  let res: Response
+  try {
+    res = await fetchWithTimeout(
+      ANTHROPIC_URL,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        body: JSON.stringify(payload),
+      },
+      FETCH_TIMEOUT_MS,
+    )
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error('이미지 인식이 너무 오래 걸려요(90초 초과). 잠시 후 다시 시도해 주세요.')
+    }
+    throw new Error(`Claude Vision 연결 실패: ${e?.message ?? e}`)
+  }
 
   const resp: any = await res.json()
   if (!res.ok) {
