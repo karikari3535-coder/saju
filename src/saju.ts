@@ -113,6 +113,8 @@ export interface SajuFlags {
   timeKnown: boolean
   calendar: Calendar
   dayStemConfirmed: boolean
+  /** 시청자가 '윤달'이라 했지만 그 해엔 윤달이 없어 평달로 보정한 경우 true */
+  leapMonthAdjusted?: boolean
 }
 
 export interface SajuResult {
@@ -177,6 +179,8 @@ export function computeSaju(input: SajuInput): SajuResult {
   let sYear = input.year
   let sMonth = input.month
   let sDay = input.day
+  // 윤달이라 했지만 그 해엔 윤달이 없어 평달로 보정한 경우 — 답글 안내용 플래그(함수 스코프)
+  let leapMonthAdjusted = false
   if (calendar === 'lunar') {
     const wantLeap = input.isLeapMonth ?? false
     let solar: { year: number; month: number; day: number } | null = null
@@ -209,7 +213,8 @@ export function computeSaju(input: SajuInput): SajuResult {
 
     if (usedLeapFallback) {
       // 윤달이라 하셨지만 그 해엔 윤달이 없어 평달로 보고 변환한 경우.
-      //   AI가 답글에서 부드럽게 확인 문구를 넣도록 안내 노트를 남긴다.
+      //   AI가 답글에서 부드럽게 확인 문구를 넣도록 안내 노트 + 플래그를 남긴다.
+      leapMonthAdjusted = true
       notes.push(
         `말씀하신 음력 ${input.month}월은 ${input.year}년에는 윤달이 없어요. ` +
           `그래서 평달(음력 ${input.year}-${input.month}-${input.day})로 보고 ` +
@@ -317,6 +322,7 @@ export function computeSaju(input: SajuInput): SajuResult {
       timeKnown,
       calendar,
       dayStemConfirmed: true,
+      leapMonthAdjusted,
     },
     notes,
   }

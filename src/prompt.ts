@@ -227,6 +227,8 @@ export interface DataBlock {
     calendar: 'solar' | 'lunar'
     crisis: boolean
     year_from_title: boolean
+    /** 윤달이라 했지만 그 해엔 윤달이 없어 평달로 보정한 경우 */
+    leap_month_adjusted: boolean
     ambiguity: string[]
   }
   parsed: {
@@ -288,6 +290,7 @@ export function buildDataBlock(
       calendar: saju.flags.calendar,
       crisis,
       year_from_title: opts.yearFromTitle ?? false,
+      leap_month_adjusted: saju.flags.leapMonthAdjusted ?? false,
       ambiguity: [...parsed.ambiguity, ...saju.notes],
     },
     parsed: {
@@ -360,6 +363,13 @@ export function buildUserMessage(block: DataBlock): string {
         `- 소제목·헤더·이모지 제목·구분선·목록 없이 자연스럽게 이어지는 문단으로 쓰세요.` +
         (block.flags.year_from_title
           ? ` 연도는 영상 제목 기준으로 이미 확정했으니, "다른 연도시면 알려달라"거나 "영상 제목을 보고 풀었다"는 식의 연도 확인·해명 문구는 절대 넣지 말고 그 연도를 전제로 자연스럽게 풀이만 하세요.`
+          : ``) +
+        (block.flags.leap_month_adjusted
+          ? `\n- [★윤달 안내 — 반드시 포함] 이 시청자는 '윤달'이라고 적었지만, 그 해에는 그 음력 달의 윤달이 실제로 존재하지 않습니다. ` +
+            `flags.ambiguity에 어떤 연·월이 보정됐는지 적혀 있으니 그 내용을 바탕으로, 사주 풀이를 본격적으로 시작하기 전(보통 도입 직후나 첫 문단 부근) ` +
+            `또는 답글 말미에 부드럽고 정중하게 한 번 안내하세요. 예: "말씀해주신 ○○년에는 음력 ○월에 윤달이 없어서, 평달 ○월 ○일로 보고 풀었어요. ` +
+            `혹시 다른 달의 윤달이셨다면 알려주시면 다시 봐드릴게요." 어르신이 무안하지 않도록 따뜻하게, 비난하는 느낌 없이 ` +
+            `"흔히 헷갈리실 수 있는 부분"이라는 결로 전하세요. 이 안내는 답글 어딘가에 반드시 한 번 들어가야 하며, 너무 길게 끌지 말고 2~3문장 이내로 자연스럽게 녹이세요.`
           : ``) +
         (block.flags.crisis
           ? ` 위기 신호가 있으니 공감 후 자연스럽게 자살예방 상담전화 109를 안내하세요.`
