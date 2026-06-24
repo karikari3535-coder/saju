@@ -97,8 +97,23 @@ export function extractYoutubeTarget(input: string): YoutubeTarget {
 
 const API = 'https://www.googleapis.com/youtube/v3'
 
+// YouTube API 호출 타임아웃(초). API가 응답하지 않을 때 무한 대기하지 않도록.
+const YT_FETCH_TIMEOUT_MS = 20_000 // 20초
+
 async function gfetch(url: string): Promise<any> {
-  const res = await fetch(url)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), YT_FETCH_TIMEOUT_MS)
+  let res: Response
+  try {
+    res = await fetch(url, { signal: controller.signal })
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error('YouTube 응답이 너무 오래 걸려요(20초 초과). 잠시 후 다시 시도해 주세요.')
+    }
+    throw new Error(`YouTube 연결 오류: ${e?.message ?? '네트워크 문제'}`)
+  } finally {
+    clearTimeout(timer)
+  }
   const data = await res.json()
   if (!res.ok) {
     const reason = data?.error?.message || res.statusText

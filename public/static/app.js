@@ -564,16 +564,45 @@ async function processOneVideo(entry) {
     entry.unanswered = list.length;
     if (!list.length) { entry.status = 'empty'; entry.results = []; entry.stats = { generated: 0, skipped: 0, failed: 0 }; render(); return; }
 
-    // 2) 일괄 초안 생성
-    entry.status = 'generating'; render();
-    const items = list.map(c => ({
-      comment_id: c.comment_id, author: c.author, text: c.text, published_at: c.published_at,
-    }));
-    const { data: bd } = await axios.post('/api/batch', { items, videoBirthYear: birthYear }, { timeout: BATCH_TIMEOUT });
-    if (!bd.ok) { entry.status = 'error'; entry.error = bd.error || '일괄 생성 실패'; render(); return; }
-    entry.results = bd.results || [];
-    entry.stats = bd.stats || null;
-    entry.truncated = bd.truncated || 0;
+    // 2) 초안 생성 — 댓글을 "1건씩 순차"로 처리하며 진행률을 실시간 표시.
+    //    한 번에 다 던지면 답글 1건당 수십 초가 걸려 화면이 "멈춘 것처럼" 보이므로,
+    //    한 건 끝날 때마다 결과를 바로 화면에 채우고 "n/총 완료"를 보여준다.
+    entry.status = 'generating';
+    entry.results = [];
+    entry.stats = { generated: 0, skipped: 0, failed: 0, review: 0 };
+    entry.truncated = 0;
+    entry.progress = { done: 0, total: list.length };
+    render();
+
+    const MAX_ITEMS = 20; // 서버와 동일한 상한
+    const work = list.slice(0, MAX_ITEMS);
+    entry.truncated = Math.max(0, list.length - MAX_ITEMS);
+
+    for (const c of work) {
+      const item = { comment_id: c.comment_id, author: c.author, text: c.text, published_at: c.published_at };
+      try {
+        const { data: bd } = await axios.post('/api/batch', { items: [item], videoBirthYear: birthYear }, { timeout: AI_TIMEOUT });
+        if (bd.ok && Array.isArray(bd.results) && bd.results.length) {
+          const r = bd.results[0];
+          entry.results.push(r);
+          if (bd.stats) {
+            entry.stats.generated += bd.stats.generated || 0;
+            entry.stats.skipped += bd.stats.skipped || 0;
+            entry.stats.failed += bd.stats.failed || 0;
+            entry.stats.review += bd.stats.review || 0;
+          }
+        } else {
+          entry.results.push({ comment_id: c.comment_id, author: c.author, text: c.text, error: bd.error || '생성 실패' });
+          entry.stats.failed++;
+        }
+      } catch (e) {
+        // 한 건이 실패/시간초과해도 멈추지 말고 다음 댓글로 진행
+        entry.results.push({ comment_id: c.comment_id, author: c.author, text: c.text, error: friendlyAxiosError(e) });
+        entry.stats.failed++;
+      }
+      entry.progress.done++;
+      render(); // 매 건마다 화면 갱신 → 진행이 눈에 보임
+    }
     entry.status = 'done';
   } catch (e) {
     entry.status = 'error';
@@ -594,7 +623,7 @@ async function generateForVideo(videoId) {
       video_id: v.video_id, title: v.title, published_at: v.published_at,
       video_birth_year: v.video_birth_year ?? null,
       status: 'pending', unanswered: v.unanswered_count ?? 0,
-      results: [], stats: null, error: '', open: true, truncated: 0,
+      results: [], stats: null, error: '', open: true, truncated: 0, progress: null,
     };
     state.channelBatch.videos.unshift(entry); // 최신 작업이 위로
   } else {
@@ -626,7 +655,7 @@ async function generateForAllVideos() {
     video_id: v.video_id, title: v.title, published_at: v.published_at,
     video_birth_year: v.video_birth_year ?? null,
     status: 'pending', unanswered: v.unanswered_count ?? 0,
-    results: [], stats: null, error: '', open: true, truncated: 0,
+    results: [], stats: null, error: '', open: true, truncated: 0, progress: null,
   }));
   state.channelBatch.running = true;
   state.channelBatch.total = videos.length;
@@ -921,7 +950,7 @@ function channelView() {
       let stLabel = '';
       if (cb) {
         if (cb.status === 'loading') stLabel = '<span class="text-xs text-amber-600"><span class="spinner"></span> 댓글 수집…</span>';
-        else if (cb.status === 'generating') stLabel = '<span class="text-xs text-amber-600"><span class="spinner"></span> 답글 생성…</span>';
+        else if (cb.status === 'generating') { const pg = cb.progress; stLabel = `<span class="text-xs text-amber-600"><span class="spinner"></span> 답글 생성…${pg && pg.total ? ` ${pg.done}/${pg.total}` : ''}</span>`; }
         else if (cb.status === 'done') stLabel = `<span class="text-xs text-emerald-600">✓ ${(cb.results||[]).filter(r=>r.draft).length}개 생성</span>`;
         else if (cb.status === 'empty') stLabel = '<span class="text-xs text-stone-400">대상 없음</span>';
         else if (cb.status === 'error') stLabel = '<span class="text-xs text-rose-500">실패</span>';
@@ -979,7 +1008,11 @@ function channelBatchVideoCard(entry) {
   let statusLine = '';
   if (entry.status === 'pending') statusLine = '<span class="text-xs text-stone-400">대기 중…</span>';
   else if (entry.status === 'loading') statusLine = '<span class="text-xs text-amber-600"><span class="spinner"></span> 미답변 댓글 수집 중…</span>';
-  else if (entry.status === 'generating') statusLine = '<span class="text-xs text-amber-600"><span class="spinner"></span> 답글을 짓는 중…</span>';
+  else if (entry.status === 'generating') {
+    const pg = entry.progress;
+    const pgText = pg && pg.total ? ` (${pg.done}/${pg.total}건 완료)` : '';
+    statusLine = `<span class="text-xs text-amber-600"><span class="spinner"></span> 답글을 짓는 중…${pgText} <span class="text-stone-400">— 한 건당 40~60초 걸려요</span></span>`;
+  }
   else if (entry.status === 'empty') statusLine = '<span class="text-xs text-emerald-700"><i class="fas fa-circle-check mr-1"></i>미답변 사주 댓글이 없어요.</span>';
   else if (entry.status === 'error') statusLine = `<span class="text-xs text-rose-500"><i class="fas fa-circle-exclamation mr-1"></i>${esc(entry.error||'실패')}</span>`;
   else if (entry.status === 'done') statusLine = entry.stats ? `<span class="text-xs text-stone-500">생성 ${entry.stats.generated} · 건너뜀 ${entry.stats.skipped}${entry.stats.review ? ` · <span class="text-rose-600 font-semibold">검토필요 ${entry.stats.review}</span>` : ''} · 실패 ${entry.stats.failed}</span>` : '';
