@@ -178,25 +178,50 @@ export function computeSaju(input: SajuInput): SajuResult {
   let sMonth = input.month
   let sDay = input.day
   if (calendar === 'lunar') {
+    const wantLeap = input.isLeapMonth ?? false
+    let solar: { year: number; month: number; day: number } | null = null
+    let usedLeapFallback = false
     try {
-      const solar = lunarToSolar(
-        input.year,
-        input.month,
-        input.day,
-        input.isLeapMonth ?? false,
-      )
-      sYear = solar.year
-      sMonth = solar.month
-      sDay = solar.day
-      notes.push(
-        `음력 ${input.year}-${input.month}-${input.day}${
-          input.isLeapMonth ? '(윤달)' : ''
-        } → 양력 ${sYear}-${sMonth}-${sDay} 로 변환했어요.`,
-      )
+      solar = lunarToSolar(input.year, input.month, input.day, wantLeap)
     } catch {
+      // 윤달로 변환 실패 → 해당 해/월에 윤달이 없을 가능성.
+      //   이런 경우(어르신 시청자들이 윤달/평달을 헷갈리는 일이 흔함)
+      //   평달로 자동 재시도해서 막히지 않고 사주를 봐 드린다.
+      if (wantLeap) {
+        try {
+          solar = lunarToSolar(input.year, input.month, input.day, false)
+          usedLeapFallback = true
+        } catch {
+          solar = null
+        }
+      }
+    }
+
+    if (!solar) {
       return guideResult(input, calendar, [
         '음력 날짜를 양력으로 변환하지 못했어요. 양력 날짜를 알면 양력으로 입력해 주세요.',
       ])
+    }
+
+    sYear = solar.year
+    sMonth = solar.month
+    sDay = solar.day
+
+    if (usedLeapFallback) {
+      // 윤달이라 하셨지만 그 해엔 윤달이 없어 평달로 보고 변환한 경우.
+      //   AI가 답글에서 부드럽게 확인 문구를 넣도록 안내 노트를 남긴다.
+      notes.push(
+        `말씀하신 음력 ${input.month}월은 ${input.year}년에는 윤달이 없어요. ` +
+          `그래서 평달(음력 ${input.year}-${input.month}-${input.day})로 보고 ` +
+          `양력 ${sYear}-${sMonth}-${sDay}로 변환했어요. ` +
+          `혹시 다른 달의 윤달을 말씀하신 거라면 알려주시면 다시 봐 드릴게요.`,
+      )
+    } else {
+      notes.push(
+        `음력 ${input.year}-${input.month}-${input.day}${
+          wantLeap ? '(윤달)' : ''
+        } → 양력 ${sYear}-${sMonth}-${sDay} 로 변환했어요.`,
+      )
     }
   }
 
