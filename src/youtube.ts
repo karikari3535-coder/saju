@@ -48,19 +48,38 @@ export function looksLikeSaju(text: string): boolean {
 
 /**
  * 영상 제목에서 출생연도를 추출한다.
- *  지원: "1990년생", "90년생", "1990년 생", "1990년生"
+ *  지원: "1990년생", "90년생", "1990년 생", "1990년生",
+ *        "71년 신해년생"(연도와 '생' 사이에 간지/띠가 끼어도 인식),
+ *        "71년생 돼지띠", "72년생 쥐띠"
+ *  ※ 제목 앞쪽의 "[2026년 운세]" 같은 '운세 연도'는 출생연도로 오인하지 않도록
+ *    '생/띠/년생'과 직접 이어지는 연도만 출생연도로 본다.
  */
+// 띠(12지) / 간지의 띠 한자어 — 연도와 '생' 사이에 끼어드는 단어들
+const ZODIAC_BETWEEN =
+  '(?:[갑을병정무기경신임계]?[자축인묘진사오미신유술해]\\s*년?|쥐|소|호랑이|범|토끼|용|뱀|말|양|원숭이|닭|개|돼지)\\s*띠?'
+
 export function extractBirthYearFromTitle(title: string): number | null {
   const t = title ?? ''
-  // 4자리 연도 + 생
-  let m = t.match(/(19\d{2}|20\d{2})\s*년?\s*생/)
+
+  // (A) 4자리 연도 + (선택: 간지/띠) + 생   예: "1971년생", "1971년 신해년생"
+  let m = t.match(new RegExp(`(19\\d{2}|20\\d{2})\\s*년?\\s*(?:${ZODIAC_BETWEEN}\\s*)?생`))
   if (m) return parseInt(m[1], 10)
-  // 2자리 연도 + 년생 (예: 90년생)
-  m = t.match(/(?<!\d)(\d{2})\s*년\s*생/)
+
+  // (B) 2자리 연도 + 년 + (선택: 간지/띠) + 생   예: "90년생", "71년 신해년생"
+  m = t.match(new RegExp(`(?<!\\d)(\\d{2})\\s*년\\s*(?:${ZODIAC_BETWEEN}\\s*)?생`))
   if (m) {
     const yy = parseInt(m[1], 10)
     return yy <= 25 ? 2000 + yy : 1900 + yy
   }
+
+  // (C) 2자리 연도 + 생(띠 표현 없이 바로)   예: "71년생 돼지띠"는 (B)에서 잡힘.
+  //     "71년 돼지띠"처럼 '생'이 아예 없고 '띠'로 끝나는 경우도 출생연도로 본다.
+  m = t.match(new RegExp(`(?<!\\d)(\\d{2})\\s*년\\s*${ZODIAC_BETWEEN}`))
+  if (m) {
+    const yy = parseInt(m[1], 10)
+    return yy <= 25 ? 2000 + yy : 1900 + yy
+  }
+
   return null
 }
 
