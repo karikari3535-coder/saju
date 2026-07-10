@@ -20,7 +20,8 @@ export const PROMPT_VERSION = 'v4.2'
  * 시기·대운 풀이 시 AI가 "올해"를 정확히 인식하도록 시스템 프롬프트에 주입한다.
  * (모델 학습 시점과 무관하게 항상 올바른 현재 연도를 쓰게 함)
  */
-function currentYearContext(): string {
+/** 현재 연도와 그 해의 60갑자 세운(한글/한자)을 계산해 구조화 반환. */
+export function currentYearInfo(): { year: number; ganji: string; ganjiHanja: string } {
   const now = new Date()
   const year = now.getFullYear()
   // 60갑자 세운: 1984=갑자(甲子) 기준
@@ -28,12 +29,23 @@ function currentYearContext(): string {
   const STEM_HJ = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']
   const BRANCHES = ['자', '축', '인', '묘', '진', '사', '오', '미', '신', '유', '술', '해']
   const BRANCH_HJ = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥']
-  const si = (year - 1984) % 10
-  const bi = (year - 1984) % 12
-  const s = (si + 10) % 10
-  const b = (bi + 12) % 12
-  const ganji = `${STEMS[s]}${BRANCHES[b]}년(${STEM_HJ[s]}${BRANCH_HJ[b]})`
-  return `올해는 ${year}년 ${ganji}입니다. 시기·대운·세운을 말할 때 이 현재 연도를 기준으로 삼으세요.`
+  const s = (((year - 1984) % 10) + 10) % 10
+  const b = (((year - 1984) % 12) + 12) % 12
+  return {
+    year,
+    ganji: `${STEMS[s]}${BRANCHES[b]}년`,
+    ganjiHanja: `${STEM_HJ[s]}${BRANCH_HJ[b]}`,
+  }
+}
+
+function currentYearContext(): string {
+  const { year, ganji, ganjiHanja } = currentYearInfo()
+  return (
+    `[올해 확정값] 올해는 정확히 ${year}년이며 그 해의 간지(세운)는 ${ganji}(${ganjiHanja})입니다. ` +
+    `"올해/지금/현재"라고 쓸 땐 반드시 ${year}년으로만 쓰고, 올해의 간지를 언급할 땐 반드시 "${ganji}"으로만 쓰세요. ` +
+    `이 값을 스스로 다시 계산하거나 다른 연도(예: 태어난 해, 과거 연도)·다른 간지로 바꾸지 마세요. ` +
+    `데이터블록의 today.year / today.ganji 값과 항상 일치해야 합니다.`
+  )
 }
 
 export const CURRENT_YEAR_CONTEXT = currentYearContext()
@@ -231,6 +243,12 @@ export interface DataBlock {
     leap_month_adjusted: boolean
     ambiguity: string[]
   }
+  /** 올해(응답 생성 시점)의 확정 연도·간지. AI는 이 값만 '올해'로 사용해야 한다. */
+  today: {
+    year: number
+    ganji: string
+    ganji_hanja: string
+  }
   parsed: {
     age_band: string | null
     gender: string | null
@@ -281,9 +299,16 @@ export function buildDataBlock(
           daewoon: saju.daewoon,
         }
 
+  const today = currentYearInfo()
+
   return {
     prompt_version: PROMPT_VERSION,
     viewer_comment: comment,
+    today: {
+      year: today.year,
+      ganji: today.ganji,
+      ganji_hanja: today.ganjiHanja,
+    },
     flags: {
       mode: saju.mode,
       time_known: saju.flags.timeKnown,
@@ -368,6 +393,10 @@ export function buildUserMessage(block: DataBlock): string {
         `로또·복권·횡재수를 물었으면 회피하지 말고, 본인 사주가 한 방(횡재)의 결인지 차곡차곡 쌓이는 결인지 솔직하게 풀되 ` +
         `"당첨을 보장한다"는 단정은 하지 마세요. 질문이 정말 없을 때만 그 점을 언급하고 가장 먼저 짚을 자리부터 푸세요.\n` +
         `- 시기는 올해(및 가까운 미래) 안에서 분기·월 단위로 짚되 각 구간마다 구체적 행동을 붙이세요.\n` +
+        `- [★올해 연도·간지 — 절대 규칙] "올해/지금/현재"를 서기 연도로 쓸 땐 반드시 데이터블록 today.year(${block.today.year})만 쓰세요. ` +
+        `올해의 간지(세운)를 언급할 땐 반드시 today.ganji("${block.today.ganji}")만 쓰세요. ` +
+        `절대로 올해 간지를 스스로 계산해 다른 간지(예: 경술년 등)로 쓰거나, 태어난 해·과거 연도(예: ${block.today.year - 50}년대)를 "올해"로 착각해 쓰지 마세요. ` +
+        `헷갈리면 올해 연도·간지는 아예 숫자로 언급하지 말고 "올해"라는 표현만 쓰세요.\n` +
         `- 주의할 변수는 딱 하나만 골라 행동 처방까지 주고, 오늘 바로 해볼 수 있는 손에 잡히는 행동 도구를 한두 가지 주세요.\n` +
         `- 마무리는 본인의 핵심 비유를 담은 따옴표 한 문장 + 그 문장을 떠올릴 때 한 줄 + 계절감 응원으로 맺으세요.\n` +
         `- 함께 봐달라고 한 사람이 있으면 그 사람의 사주 글자는 추정하지 말고 관계 흐름만 큰 틀에서 짚으세요.\n` +
