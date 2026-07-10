@@ -223,9 +223,11 @@ export const SYSTEM_PROMPT = `당신은 유튜브 채널 "천기누설 만신보
 - 유튜브 댓글에 그대로 붙여넣을 수 있는 순수 텍스트 답글만 출력한다.
 - 머리말("다음은 답글입니다") · 코드블록 · 소제목 · 구분선 금지.
 
-[현재 시점]
+[현재 시점 — 최우선 규칙]
 - ${CURRENT_YEAR_CONTEXT}
-- "올해", "내년", "요즘 운" 등을 말할 때 절대 과거 연도를 쓰지 마라.`
+- "올해", "내년", "요즘 운" 등을 말할 때 절대 과거 연도를 쓰지 마라.
+- 올해의 간지(세운)는 데이터블록 today.ganji에 이미 확정돼 주어진다. 그 값만 써라. 사주(연/월/일주) 간지로 올해 세운을 스스로 계산하거나 경술년·정미년 등 다른 간지로 바꾸면 틀린다.
+- 태어난 해(과거 연도)를 "올해"로 착각하지 마라.`
 
 // ─────────────────────────────────────────────────────────────────
 // 2) 데이터블록 (코드 → AI 다리)
@@ -248,6 +250,8 @@ export interface DataBlock {
     year: number
     ganji: string
     ganji_hanja: string
+    /** AI가 세운을 재계산하지 못하도록 하는 명시 지시 */
+    note: string
   }
   parsed: {
     age_band: string | null
@@ -308,6 +312,7 @@ export function buildDataBlock(
       year: today.year,
       ganji: today.ganji,
       ganji_hanja: today.ganjiHanja,
+      note: `이 값이 '올해'의 확정 연도·세운입니다. "올해/지금/현재"는 ${today.year}년, 올해 간지는 "${today.ganji}"(${today.ganjiHanja})로만 쓰세요. 사주(연/월/일주) 간지로 올해 세운을 스스로 계산하지 말고, 경술년 등 다른 간지로 바꾸지 마세요.`,
     },
     flags: {
       mode: saju.mode,
@@ -417,6 +422,12 @@ export function buildUserMessage(block: DataBlock): string {
           : ``)
 
   return (
+    `[★★ 가장 먼저 확인 — 올해 확정값 (재계산 절대 금지) ★★]\n` +
+    `· 올해(응답을 쓰는 지금)는 서기 ${block.today.year}년입니다. "올해/지금/현재"라고 쓸 땐 오직 ${block.today.year}년입니다.\n` +
+    `· 올해의 간지(세운)는 이미 확정되어 있습니다: "${block.today.ganji}"(${block.today.ganji_hanja}). 올해의 간지를 언급할 땐 오직 "${block.today.ganji}"만 쓰세요.\n` +
+    `· 아래 데이터블록의 사주 간지(연주·월주·일주 등)는 '태어난 해'의 값입니다. 그것으로 올해 세운을 스스로 계산하지 마세요. ` +
+    `올해 간지를 직접 계산하거나 다른 간지(예: 경술년·정미년 등)로 바꿔 쓰면 틀립니다. 반드시 위 확정값 "${block.today.ganji}"만 쓰세요.\n` +
+    `· 태어난 해(${block.parsed.age_band ? '' : ''}과거 연도)를 "올해"로 착각하지 마세요. 헷갈리면 올해 간지는 아예 언급하지 말고 "올해"라는 말만 쓰세요.\n\n` +
     `아래는 코드가 계산한 시청자 사주 데이터입니다(JSON). 이 값만 신뢰하고 해석하세요.\n\n` +
     '```json\n' +
     JSON.stringify(block, null, 2) +
