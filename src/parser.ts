@@ -718,7 +718,16 @@ function extractDate(
         // 현재 시점/기간 표현이 붙으면 출생월이 아님
         if (/^(중순|초순|초|말|말일|경|까지|부터|쯤|달|에는|에|중|안|내)/.test(after.trim())) continue
         if (/(지금|현재|올해|이번|다음|내년|작년|오는|요즘|최근)\s*$/.test(before)) continue
-        // 살아남은 첫 번째 월만 출생월 후보로 채택
+        // 살아남은 첫 번째 월만 출생월 후보로 채택.
+        //   단, 월을 잡았어도 텍스트 뒤쪽에 별도로 떨어진 'NN일'(예: "2월생. 27일")이 있으면
+        //   그것을 태어난 일로 이어붙인다. (월생/월 다음에 일이 따로 오는 흔한 표기)
+        const dm = text.match(/(?<![\d:.])(\d{1,2})\s*일(?![\d:.])/)
+        if (dm) {
+          const day = +dm[1]
+          if (day >= 1 && day <= 31) {
+            return normalizeDate(year, month, day, ambiguity)
+          }
+        }
         return { year, month, day: null }
       }
       // 월·일 모두 없으면 연도만
