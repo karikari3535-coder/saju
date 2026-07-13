@@ -233,10 +233,12 @@ export function parseComment(raw: string): ParsedComment {
   // ── 1) 음/양력 표기 ───────────────────────────────────────────
   //   "음력"/"음달" 외에도 날짜 옆 괄호 단독 표기 "(음)" / "( 음 )" / "[음]" 도 음력으로 인식한다.
   //   (단독 "음"은 마음·처음·다음 등 오탐이 많으므로, 괄호로 감싼 경우만 인정)
+  //   추가: "73.음.10.19" 처럼 점/공백/슬래시로 앞뒤가 구분된 단독 "음"/"양"도 인정한다.
+  //   (숫자 사이에 구분자로 낀 형태라 마음·처음 등과 헷갈릴 위험이 낮음)
   let calendarMentioned = false
-  if (/음력|음\s*달|陰曆|[(（[]\s*음\s*[)）\]]/.test(text)) { result.calendar = 'lunar'; calendarMentioned = true }
+  if (/음력|음\s*달|陰曆|[(（[]\s*음\s*[)）\]]|[.\-\/\s]음[.\-\/\s]/.test(text)) { result.calendar = 'lunar'; calendarMentioned = true }
   if (/윤\s*달|윤달|閏/.test(text)) result.isLeapMonth = true
-  if (/양력|陽曆|[(（[]\s*양\s*[)）\]]/.test(text)) { result.calendar = 'solar'; calendarMentioned = true }
+  if (/양력|陽曆|[(（[]\s*양\s*[)）\]]|[.\-\/\s]양[.\-\/\s]/.test(text)) { result.calendar = 'solar'; calendarMentioned = true }
 
   // ── 2) 생년월일 추출 ──────────────────────────────────────────
   const date = extractDate(text, ambiguity)
@@ -497,6 +499,25 @@ function extractDate(
   //   (예: "1969~10~21 아침 10시" → 연1969 월10 일21 / "1990,5,15" → 연1990 월5 일15)
   m = text.match(/(\d{4})\s*[.\-\/~～〜,，·ㆍ]\s*(\d{1,2})\s*[.\-\/~～〜,，·ㆍ]\s*(\d{1,2})/)
   if (m) return normalizeDate(+m[1], +m[2], +m[3], ambiguity)
+
+  // 패턴 B1: 연·월·일 사이에 음/양력 표기가 낀 점 구분형 — "73.음.10.19" / "73.양.10.19" / "1973.음력.10.19"
+  //   연도(2~4자리) 뒤에 (음|양|음력|양력)이 구분자로 끼고, 그 뒤 월·일이 점/하이픈/슬래시/공백으로 구분된 경우.
+  //   (달력 종류는 위 1) 단계에서 이미 감지됨)
+  m = text.match(
+    /(?<!\d)(\d{2,4})\s*[.\-\/\s]\s*(?:음력|양력|음|양)\s*[.\-\/\s]\s*(\d{1,2})\s*[.\-\/\s]\s*(\d{1,2})(?!\s*\d)/,
+  )
+  if (m) {
+    const mo = +m[2]
+    const da = +m[3]
+    if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) {
+      let year = +m[1]
+      if (m[1].length <= 2) {
+        year = year <= 25 ? 2000 + year : 1900 + year
+        ambiguity.push(`연도를 2자리(${m[1]})로 적어 ${year}년으로 추정했어요. 확인해 주세요.`)
+      }
+      return normalizeDate(year, mo, da, ambiguity)
+    }
+  }
 
   // 패턴 B3: 공백 구분 "1970 02 09" / "1970 2 9" (4자리 연도 + 공백 + 월 + 공백 + 일)
   //   "1970 02 09 음력 조자시 여자" 처럼 구분자 없이 공백으로만 연·월·일을 나눈 경우.
